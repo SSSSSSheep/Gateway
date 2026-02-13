@@ -8,6 +8,8 @@ app_common:=app/app_common.h app/app_common.c
 
 app_message:=app/app_message.h app/app_message.c
 
+app_mqtt:=app/app_mqtt.h app/app_mqtt.c
+
 log_test: test/log_test.c $(log)
 	-$(CC) $(CFLAGS) $^ -o $@ -I thirdparty
 	-./$@
@@ -28,7 +30,18 @@ app_message_test:test/message_test.c $(app_message) $(app_common) $(log) $(json)
 	-./$@
 	-rm $@
 
+mqtt_test: test/mqtt_test.c
+	-$(CC) $^ -o $@ -lpaho-mqtt3c
+	-./$@
+	-rm $@
+
+app_mqtt_test:test/app_mqtt_test.c $(app_mqtt) $(log) 
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpaho-mqtt3c
+	-./$@
+	-rm $@
+
 
 # $^: 依赖列表
 # $@: 目标文件
 # -I: 给gcc配置包含查看路径
+# -L: 指定用到的下载的库
