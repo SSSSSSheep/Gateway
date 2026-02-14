@@ -12,6 +12,8 @@ app_mqtt:=app/app_mqtt.h app/app_mqtt.c
 
 app_pool:=app/app_pool.h app/app_pool.c
 
+app_buffer:=app/app_buffer.h app/app_buffer.c
+
 log_test: test/log_test.c $(log)
 	-$(CC) $(CFLAGS) $^ -o $@ -I thirdparty
 	-./$@
@@ -43,6 +45,11 @@ app_mqtt_test:test/app_mqtt_test.c $(app_mqtt) $(log)
 	-rm $@
 
 app_pool_test:test/app_pool_test.c $(app_pool) $(log)
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty
+	-./$@
+	-rm $@
+
+app_buffer_test:test/app_buffer_test.c $(app_buffer) $(log)
 	-$(CC) $^ -o $@ -Iapp -Ithirdparty
 	-./$@
 	-rm $@
