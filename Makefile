@@ -10,6 +10,8 @@ app_message:=app/app_message.h app/app_message.c
 
 app_mqtt:=app/app_mqtt.h app/app_mqtt.c
 
+app_pool:=app/app_pool.h app/app_pool.c
+
 log_test: test/log_test.c $(log)
 	-$(CC) $(CFLAGS) $^ -o $@ -I thirdparty
 	-./$@
@@ -37,6 +39,11 @@ mqtt_test: test/mqtt_test.c
 
 app_mqtt_test:test/app_mqtt_test.c $(app_mqtt) $(log) 
 	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpaho-mqtt3c
+	-./$@
+	-rm $@
+
+app_pool_test:test/app_pool_test.c $(app_pool) $(log)
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty
 	-./$@
 	-rm $@
 
