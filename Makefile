@@ -14,6 +14,9 @@ app_pool:=app/app_pool.h app/app_pool.c
 
 app_buffer:=app/app_buffer.h app/app_buffer.c
 
+app_device:=app/app_device.h app/app_device.c
+
+app_bt:=app/app_bt.h app/app_bt.c
 log_test: test/log_test.c $(log)
 	-$(CC) $(CFLAGS) $^ -o $@ -I thirdparty
 	-./$@
@@ -54,6 +57,10 @@ app_buffer_test:test/app_buffer_test.c $(app_buffer) $(log)
 	-./$@
 	-rm $@
 
+app_device_test: test/app_device_test.c $(app_device) $(app_bt) $(log) $(app_buffer) $(app_message) $(app_common) $(json) $(app_pool) $(app_mqtt) $(app_message) 
+	-$(CC) -o $@ $^ -Ithirdparty -Iapp -lpaho-mqtt3c
+	-./app_device_test
+	-rm app_device_test
 
 # $^: 依赖列表
 # $@: 目标文件
