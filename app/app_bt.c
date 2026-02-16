@@ -1,12 +1,64 @@
+#define _GNU_SOURCE
 #include "app_bt.h"
-#include <string.h>
+#include "app_serial.h"
 #include "log/log.h"
+#include <string.h>
+#include <unistd.h>
 
+static int init_bluetooth(Device *device)
+{
+    // 初始化串口
+    app_serial_init(device);
+
+    // 设置串口为非阻塞模式
+    app_serial_setBlockMode(device, 0);
+    app_serial_flush(device);
+
+    // 串口的波特率当前是9600
+    // 如果当前蓝牙可用，说明当前的波特率为9600
+    if (app_bt_status(device) == 0)
+    {
+        // 将蓝牙的波特率设置为115200
+        app_bt_setBaudRate(device, BT_BR_115200);
+        // 重启蓝牙设备
+        app_bt_reset(device);
+        // 等待蓝牙设备重启完成
+        sleep(2);
+    }
+    // 将串口的波特率设置为115200
+    app_serial_setBaudRate(device, BR_115200);
+    app_serial_flush(device);
+
+    // 判断蓝牙是否可用 如果不可用 返回-1
+    if (app_bt_status(device) != 0)
+    {
+        log_error("bluetooth is not available");
+        return -1;
+    }
+    // 设置组网ID: 组内相同 组间不同
+    app_bt_setNetId(device, "1111");
+    // 设置MAC地址: 组内不同 组间可以相同
+    app_bt_setMaddr(device, "0001");
+    // 将串口设置为阻塞模式
+    app_serial_setBlockMode(device, 1);
+    app_serial_flush(device);
+
+    log_debug("bluetooth is available");
+    return 0;
+}
+
+/**
+ * 蓝牙模块初始化
+ * 1. 给设备指定perWrite和postRead两个函数
+ * 2. 蓝牙连接初始化配置
+ */
 int app_bt_init(Device *device)
 {
     device->post_read = app_bt_postRead;
     device->pre_write = app_bt_preWrite;
-    return 0;
+
+    // 初始化蓝牙
+    return init_bluetooth(device);
 }
 
 int app_bt_preWrite(char *data, int data_len)
@@ -112,4 +164,83 @@ int app_bt_postRead(char *data, int data_len)
     remove_data(i);
 
     return 0;
+}
+
+// 判断是否收到ACK指令
+int wait_ack(int fd)
+{
+    // 等待一定时间
+    usleep(50 * 1000);
+    // 读取数据
+    char data_buf[4];
+    read(fd, data_buf, 4);
+    // 判断是否是OK\r\n
+    if (memcmp(data_buf, "OK\r\n", 4) == -1)
+    {
+        log_error("wait_ack failed");
+        return -1;
+    }
+    log_debug("wait_ack success");
+}
+
+int app_bt_status(Device *device)
+{
+    // 向蓝牙串口文件中写入"AT\r\n"的指令数据
+    write(device->fd, "AT\r\n", 4);
+    // 通过读取"OK\r\n"数据，判断蓝牙是否可用
+    return wait_ack(device->fd);
+}
+
+int app_bt_rename(Device *device, char *name)
+{
+    // 拼接指令
+    char cmd[20];
+    sprintf(cmd, "AT+NAME%s\r\n", name);
+    // 写入指令
+    write(device->fd, cmd, strlen(cmd));
+    // 等待ACK
+    return wait_ack(device->fd);
+}
+
+int app_bt_setBaudRate(Device *device, BT_BaudRate baudRate)
+{
+    // 拼接指令
+    char cmd[20];
+    sprintf(cmd, "AT+BAUD%c\r\n", baudRate);
+    // 写入指令
+    write(device->fd, cmd, strlen(cmd));
+    // 等待ACK
+    return wait_ack(device->fd);
+}
+
+int app_bt_reset(Device *device)
+{
+    // 拼接指令
+    char *cmd = "AT+RESET\r\n";
+    // 写入指令
+    write(device->fd, cmd, strlen(cmd));
+    // 等待ACK
+    return wait_ack(device->fd);
+}
+
+int app_bt_setNetId(Device *device, char *netid)
+{
+    // 拼接指令
+    char cmd[20];
+    sprintf(cmd, "AT+NETID%s\r\n", netid);
+    // 写入指令
+    write(device->fd, cmd, strlen(cmd));
+    // 等待ACK
+    return wait_ack(device->fd);
+}
+
+int app_bt_setMaddr(Device *device, char *maddr)
+{
+    // 拼接指令
+    char cmd[20];
+    sprintf(cmd, "AT+MADDR%c\r\n", maddr);
+    // 写入指令
+    write(device->fd, cmd, strlen(cmd));
+    // 等待ACK
+    return wait_ack(device->fd);
 }

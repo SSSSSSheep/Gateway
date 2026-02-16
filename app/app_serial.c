@@ -116,7 +116,7 @@ int app_serial_init(Device *device)
     app_serial_setBaudRate(device, BR_9600);
     app_serial_setParity(device, Parity_NONE);
     app_serial_setStopBits(device, SB_1);
-    app_serial_setBlockMode(device, 1);
+    // app_serial_setBlockMode(device, 0);
     app_serial_setRaw(device);
     // Ë¢ÐÂÉúÐ§
     int res = tcflush(device->fd, TCIOFLUSH);
@@ -126,5 +126,11 @@ int app_serial_init(Device *device)
         return -1;
     }
     log_debug("tcflush success");
+    return 0;
+}
+
+int app_serial_flush(Device *device)
+{
+    return tcflush(device->fd, TCIOFLUSH);
     return 0;
 }
