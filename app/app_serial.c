@@ -132,5 +132,4 @@ int app_serial_init(Device *device)
 int app_serial_flush(Device *device)
 {
     return tcflush(device->fd, TCIOFLUSH);
-    return 0;
 }

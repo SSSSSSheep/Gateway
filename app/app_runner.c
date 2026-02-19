@@ -31,5 +31,8 @@ int app_runner_run(void)
         sleep(1);
     }
 
+    // สอทลืสิด
+    app_device_close(device);
+
     return 0;
 }

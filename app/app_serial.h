@@ -2,7 +2,6 @@
 #define __APP_SERIAL_H__
 
 #include <termios.h>
-
 #include "app_device.h"
 
 // ²¨ÌØÂÊ

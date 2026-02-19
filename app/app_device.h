@@ -2,7 +2,6 @@
 #define __APP_DEVICE_H__
 
 #include <pthread.h>
-
 #include "app_buffer.h"
 
 // 设备结构体
