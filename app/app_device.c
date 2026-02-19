@@ -11,7 +11,7 @@
 
 #define BUFFER_SIZE 1024
 
-static Device *device; // 整个应用中只有一个Device对象
+static Device *device = NULL; // 整个应用中只有一个Device对象
 
 // 将下行缓冲区数据写入蓝牙串口文件的任务函数 （线程池中某个线程函数调用）
 // 两次写入的时间差要 >= 200ms
@@ -20,7 +20,7 @@ static int write_thread_fun(void *arg)
     Device *device = (Device *)arg;
     // 从下行缓冲区中读取一个字符数组message数据
     char data_buf[128];
-    int data_len = app_buffer_read(device->down_buffer, data_buf, sizeof data_buf);
+    int data_len = app_buffer_read(device->down_buffer, data_buf, sizeof(data_buf));
     // 将字符数组message转换为蓝牙数据
     if (device->pre_write)
     {
@@ -51,7 +51,7 @@ static int send_message_task(void *arg)
 {
     // 从上行缓冲区中读取一个字符数组message数据
     char data_buf[128];
-    int data_len = app_buffer_read(device->up_buffer, data_buf, sizeof data_buf);
+    int data_len = app_buffer_read(device->up_buffer, data_buf, sizeof(data_buf));
     // 将字符数组message转换为json
     char *json = app_message_chars2Json(data_buf, data_len);
     // 将json数据发送给远程
@@ -71,7 +71,7 @@ static void *read_thread_fun(void *arg)
     {
         // 从串口文件中读取数据 蓝牙数据
         char data_buf[128];
-        ssize_t data_len = read(device->fd, data_buf, sizeof data_buf);
+        ssize_t data_len = read(device->fd, data_buf, sizeof(data_buf));
         // log_debug("------:%ld", data_len);
         //  将蓝牙数据转换成字符数组Message
         if (data_len > 0 && device->post_read)

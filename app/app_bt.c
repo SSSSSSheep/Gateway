@@ -61,15 +61,15 @@ int app_bt_init(Device *device)
     return init_bluetooth(device);
 }
 
+/*
 int app_bt_preWrite(char *data, int data_len)
 {
     // 检查data数据受否合法
     if (data_len < 6)
     {
-        log_error("data_len is too short");
+        log_error("data_len is too short(6)");
         return -1;
     }
-
     // 计算蓝牙数据的长度
     int blue_len = 8 + 2 + data[2] + 2;
     // 创建蓝牙数据数组
@@ -85,12 +85,49 @@ int app_bt_preWrite(char *data, int data_len)
     memcpy(blue_data + 10, data + 5, data[2]);
     // 拷贝\r\n
     memcpy(blue_data + 10 + data[2], "\r\n", 2);
-
     // 清空data中的数据
     memset(data, 0, data_len);
     // 将蓝牙数据拷贝到data中
     memcpy(data, blue_data, blue_len);
     // 返回蓝牙数据的长度
+    return blue_len;
+}
+*/
+
+int app_bt_preWrite(char *data, int data_len)
+{
+    if (data_len < 6)
+    {
+        log_error("data_len is too short(6)");
+        return -1;
+    }
+
+    int msg_len = data[2]; // 消息长度，应该是1
+
+    // 蓝牙指令长度：AT+MESH(7) + 消息(1) + \r\n(2) = 10字节
+    // 注意：这里没有ID部分，因为下位机只检查[7]位置
+    int blue_len = 7 + msg_len + 2;
+
+    char blue_data[blue_len];
+    memset(blue_data, 0, blue_len);
+
+    // 1. 拷贝 "AT+MESH"
+    memcpy(blue_data, "AT+MESH", 7);
+
+    // 2. 将消息内容放到 blue_data[7] 位置
+    blue_data[7] = data[5]; // data[5] = 0x31 (字符 '1')
+
+    // 3. 添加结束符
+    blue_data[8] = '\r';
+    blue_data[9] = '\n';
+
+    log_debug("发送数据: [7]=0x%02X (%c)",
+              (unsigned char)blue_data[7],
+              (unsigned char)blue_data[7]);
+
+    memset(data, 0, data_len);
+    memcpy(data, blue_data, blue_len);
+
     return blue_len;
 }
 
@@ -150,7 +187,7 @@ int app_bt_postRead(char *data, int data_len)
             data[1] = 2;                             // id_len;
             data[2] = blue_len - 7;                  // msg_len;
             memcpy(data + 3, read_buf + 3, 2);       // id;
-            memcpy(data + 5, read_buf + 5, data[2]); // msg;
+            memcpy(data + 5, read_buf + 7, data[2]); // msg;
 
             // 删除缓存中已处理的蓝牙数据
             remove_data(blue_len);
@@ -181,6 +218,7 @@ int wait_ack(int fd)
         return -1;
     }
     log_debug("wait_ack success");
+    return 0;
 }
 
 int app_bt_status(Device *device)
@@ -238,7 +276,7 @@ int app_bt_setMaddr(Device *device, char *maddr)
 {
     // 拼接指令
     char cmd[20];
-    sprintf(cmd, "AT+MADDR%c\r\n", maddr);
+    sprintf(cmd, "AT+MADDR%s\r\n", maddr);
     // 写入指令
     write(device->fd, cmd, strlen(cmd));
     // 等待ACK

@@ -130,6 +130,7 @@ int app_buffer_read(Buffer *buffer, char *data_buf, int buf_size)
     log_debug("After reading the data release read lock");
     pthread_mutex_unlock(&buffer->read_lock);
 
+    log_debug("app_buffer_read returning data_len: %d", data_len);
     // 返回读取的数据长度
     return data_len;
 }
