@@ -19,6 +19,8 @@ app_device:=app/app_device.h app/app_device.c
 app_bt:=app/app_bt.h app/app_bt.c
 
 ota_http_test:= ota/ota_http.h ota/ota_http.c
+
+ota_vresion_test:= ota/ota_version.h ota/ota_version.c
 log_test: test/log_test.c $(log)
 	-$(CC) $(CFLAGS) $^ -o $@ -I thirdparty
 	-./$@
@@ -69,6 +71,10 @@ ota_http_test: test/ota_http_test.c $(ota_http_test) $(log)
 	-./$@
 	-rm $@
 
+ota_version_test: test/ota_version_test.c $(ota_vresion_test) $(log) $(json) $(ota_http_test)
+	-$(CC) -o $@ $^ -Ithirdparty -Iapp -Iota -lcurl -lcrypto
+	-./$@
+	-rm $@
 
 # $^: 依赖列表
 # $@: 目标文件
