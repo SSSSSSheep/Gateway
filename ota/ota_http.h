@@ -5,8 +5,8 @@
 #define OTA_URL_FILEINFO "http://192.168.1.4:8000/fileinfo.json"
 // 下载地址
 #define OTA_URL_DOWNLOAD "http://192.168.1.4:8000/download/gateway"
-#define OTA_LOCAL_FILE_PATH "/home/admin123/gateway.update"
-// #define OTA_LOCAL_FILE_PATH "/root/gateway.update"
+// #define OTA_LOCAL_FILE_PATH "/home/admin123/gateway.update"
+#define OTA_LOCAL_FILE_PATH "/root/gateway.update"
 /**
  * @brief 请求指定url获取json数据
  *

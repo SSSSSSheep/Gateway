@@ -48,9 +48,12 @@ int daemon_sub_process_checkStart(SubProcess *sp)
     {
         // 子进程
         // 执行sp所对应的程序模块app/ota
-        char *path = "/home/admin123/embe/Project/gateway/gateway_test";
-        char *argv[] = {path, sp->cmd_param, NULL};
-        execve(path, argv, NULL);
+        // 本地测试用例：./gateway_test 1
+        // char *path = "/home/admin123/embe/Project/gateway/gateway_test";
+
+        // 发布用例：./gateway 1
+        char *argv[] = {EXE_PATH, sp->cmd_param, NULL};
+        execve(EXE_PATH, argv, NULL);
         // 如果找不到对应的程序模块执行，直接退出当前进程
         _exit(EXIT_FAILURE);
     }

@@ -1,0 +1,48 @@
+#!/bin/sh
+PID_PATH=/root/gateway.pid
+EXE_PATH=/usr/bin/gateway
+OTA_PATH=/root/gateway.update
+BAK_PATH=/root/gateway.bak
+
+start() {
+
+    # 如果ota文件存在
+    if [ -f $OTA_PATH ]; then
+        # 将原有固件移动成备份
+        mv $EXE_PATH $BAK_PATH
+        # 将ota文件移动成固件
+        mv $OTA_PATH $EXE_PATH
+        # 给新的固件添加执行权限
+        chmod u+x $EXE_PATH
+    fi
+    
+	start-stop-daemon -S -q -p $PID_PATH \
+		--exec $EXE_PATH -- daemon
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+stop() {
+	printf "Stopping dropbear sshd: "
+	start-stop-daemon -K -q -p $PID_PATH
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+  start)
+  	start
+	;;
+  stop)
+  	stop
+	;;
+  restart|reload)
+  	restart
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?
