@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <signal.h>
 
-int is_running = 1;
+static int is_running = 1;
 
 void runner_exit(int sig)
 {

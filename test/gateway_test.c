@@ -24,13 +24,9 @@ int main(int arg, char const *argv[])
     {
         daemon_runner_run();
     }
-    else if (strcmp(argv[1], "version") == 0)
-    {
-        ota_version_printVersion();
-    }
     else
     {
-        log_error("parameter error, please input app or ota or daemon or version");
+        log_error("parameter error, please input app or ota or daemon");
         return -1;
     }
     return 0;
