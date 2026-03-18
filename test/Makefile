@@ -53,7 +53,7 @@ app_mqtt_test:test/app_mqtt_test.c $(app_mqtt) $(log)
 	-rm $@
 
 app_pool_test:test/app_pool_test.c $(app_pool) $(log)
-	-$(CC) $^ -o $@ -Iapp -Ithirdparty
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpthread -lrt
 	-./$@
 	-rm $@
 
@@ -89,8 +89,9 @@ OBJS := $(app_common) $(log) $(json) $(app_message) $(app_mqtt) $(app_buffer) \
 gateway_test: test/gateway_test.c $(OBJS)
 	-$(CC)  $^ -o $@ $(IPATHS) $(LLIBS)
 	./$@ daemon
+
 #	-rm $@
-# $^: ÒÀÀµÁÐ±í
-# $@: Ä¿±êÎÄ¼þ
-# -I: ¸øgccÅäÖÃ°üº¬²é¿´Â·¾¶
-# -L: Ö¸¶¨ÓÃµ½µÄÏÂÔØµÄ¿â
+# $^: ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½
+# $@: Ä¿ï¿½ï¿½ï¿½Ä¼ï¿½
+# -I: ï¿½ï¿½gccï¿½ï¿½ï¿½Ã°ï¿½ï¿½ï¿½ï¿½é¿´Â·ï¿½ï¿½
+# -L: Ö¸ï¿½ï¿½ï¿½Ãµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ØµÄ¿

@@ -4,7 +4,7 @@
 #include <string.h>
 
 // 初始化子缓冲区
-static Buffer *init_sub_buffer(int size)
+static SubBuffer *init_sub_buffer(int size)
 {
     SubBuffer *sub_buffer = (SubBuffer *)malloc(sizeof(SubBuffer));
     sub_buffer->ptr = (char *)malloc(size);

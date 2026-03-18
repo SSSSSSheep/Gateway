@@ -142,6 +142,7 @@ int app_bt_postRead(char *data, int data_len)
                 log_debug("current read bluetooth data is too short 3, contiue read");
                 return 0;
             }
+
             // 根据缓存中蓝牙数据生成字符数组消息
             memset(data, 0, data_len);
             data[0] = 1;                             // conn_type;
