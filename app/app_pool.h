@@ -14,6 +14,16 @@ typedef enum
     JOB_TYPE_MAX           // 用于边界检查
 } job_type_t;
 
+// 回压策略枚举
+typedef enum
+{
+    BACKPRESSURE_DROP = 0,       // 丢弃策略：队列满时直接丢弃新任务
+    BACKPRESSURE_MERGE,          // 合并策略：队列满时合并相同类型的任务
+    BACKPRESSURE_DOWNSAMPLE,     // 降采样策略：队列满时按时间间隔降采样
+    BACKPRESSURE_OUTBOX,         // 本地存储策略：队列满时写入本地文件
+    BACKPRESSURE_MAX             // 用于边界检查
+} backpressure_strategy_t;
+
 // 任务数据结构（使用数据副本而非指针）
 typedef struct
 {
@@ -63,5 +73,36 @@ void app_pool_destroy(void);
  * @return int 0成功，-1失败
  */
 int app_pool_add_task(job_type_t type, const uint8_t *data, uint32_t len);
+
+/**
+ * @brief 设置回压策略
+ *
+ * @param type 任务类型
+ * @param strategy 回压策略
+ * @return int 0成功，-1失败
+ */
+int app_pool_set_backpressure_strategy(job_type_t type, backpressure_strategy_t strategy);
+
+/**
+ * @brief 重置回压统计信息
+ *
+ * @return int 0成功，-1失败
+ */
+int app_pool_reset_backpressure_stats(void);
+
+/**
+ * @brief 设置降采样间隔
+ *
+ * @param interval_ms 降采样间隔（毫秒）
+ * @return int 0成功，-1失败
+ */
+int app_pool_set_downsample_interval(uint32_t interval_ms);
+
+/**
+ * @brief 报告回压统计信息
+ *
+ * @return int 0成功，-1失败
+ */
+int app_pool_report_backpressure_stats(void);
 
 #endif // !__APP_POOL_H__

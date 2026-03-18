@@ -167,3 +167,99 @@ int app_pool_add_task(job_type_t type, const uint8_t *data, uint32_t len)
     // 发送任务到消息队列
     return mq_send(mq_fd, (char *)&task, sizeof(Task), 0);
 }
+
+// 回压策略数组
+static backpressure_strategy_t bp_strategies[JOB_TYPE_MAX] = {BACKPRESSURE_DROP};
+
+// 回压统计信息
+typedef struct {
+    uint64_t total_tasks;      // 总任务数
+    uint64_t dropped_tasks;    // 丢弃的任务数
+    uint64_t merged_tasks;     // 合并的任务数
+    uint64_t downsampled_tasks;// 降采样的任务数
+    uint64_t outbox_tasks;     // 写入outbox的任务数
+    uint64_t merge_count;      // 合并次数
+    uint64_t eagain_count;     // EAGAIN错误次数
+} backpressure_stats_t;
+
+static backpressure_stats_t bp_stats = {0};
+static pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// 降采样间隔（毫秒）
+static uint32_t downsample_interval_ms = 100;
+
+/**
+ * @brief 设置回压策略
+ */
+int app_pool_set_backpressure_strategy(job_type_t type, backpressure_strategy_t strategy)
+{
+    if (type <= JOB_TYPE_INVALID || type >= JOB_TYPE_MAX)
+    {
+        log_error("invalid job type: %d", type);
+        return -1;
+    }
+
+    if (strategy < BACKPRESSURE_DROP || strategy >= BACKPRESSURE_MAX)
+    {
+        log_error("invalid backpressure strategy: %d", strategy);
+        return -1;
+    }
+
+    bp_strategies[type] = strategy;
+    log_info("Set backpressure strategy for type %d: %d", type, strategy);
+    return 0;
+}
+
+/**
+ * @brief 重置回压统计信息
+ */
+int app_pool_reset_backpressure_stats(void)
+{
+    pthread_mutex_lock(&stats_mutex);
+    memset(&bp_stats, 0, sizeof(bp_stats));
+    pthread_mutex_unlock(&stats_mutex);
+    log_info("Backpressure stats reset");
+    return 0;
+}
+
+/**
+ * @brief 设置降采样间隔
+ */
+int app_pool_set_downsample_interval(uint32_t interval_ms)
+{
+    if (interval_ms == 0)
+    {
+        log_error("Invalid downsample interval: %u", interval_ms);
+        return -1;
+    }
+
+    downsample_interval_ms = interval_ms;
+    log_info("Set downsample interval: %u ms", interval_ms);
+    return 0;
+}
+
+/**
+ * @brief 报告回压统计信息
+ */
+int app_pool_report_backpressure_stats(void)
+{
+    pthread_mutex_lock(&stats_mutex);
+
+    log_info("=====================================");
+    log_info("Backpressure Statistics:");
+    log_info("Total tasks: %lu", bp_stats.total_tasks);
+    log_info("Dropped tasks: %lu (%.2f%%)", bp_stats.dropped_tasks,
+             bp_stats.total_tasks > 0 ? (double)bp_stats.dropped_tasks * 100.0 / bp_stats.total_tasks : 0.0);
+    log_info("Merged tasks: %lu (%.2f%%)", bp_stats.merged_tasks,
+             bp_stats.total_tasks > 0 ? (double)bp_stats.merged_tasks * 100.0 / bp_stats.total_tasks : 0.0);
+    log_info("Merge count: %lu (times merged)", bp_stats.merge_count);
+    log_info("Downsampled tasks: %lu (%.2f%%)", bp_stats.downsampled_tasks,
+             bp_stats.total_tasks > 0 ? (double)bp_stats.downsampled_tasks * 100.0 / bp_stats.total_tasks : 0.0);
+    log_info("Outbox tasks: %lu (%.2f%%)", bp_stats.outbox_tasks,
+             bp_stats.total_tasks > 0 ? (double)bp_stats.outbox_tasks * 100.0 / bp_stats.total_tasks : 0.0);
+    log_info("EAGAIN count: %lu", bp_stats.eagain_count);
+    log_info("=====================================");
+
+    pthread_mutex_unlock(&stats_mutex);
+    return 0;
+}

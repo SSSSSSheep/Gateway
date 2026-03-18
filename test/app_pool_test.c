@@ -83,9 +83,6 @@ void test_pool_initialization(void)
     // 初始化线程池
     int result = app_pool_init(2);
     TEST_ASSERT(result == 0, "Initialize thread pool");
-
-    // 重复初始化应该失败（队列已存在）
-    // 注意：这个测试可能需要根据实际实现调整
 }
 
 // 测试3: 验证任务添加和执行

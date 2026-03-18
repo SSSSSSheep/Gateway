@@ -8,33 +8,50 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 #define BUFFER_SIZE 1024
 
-static Device *device = NULL; // Õû¸öÓ¦ÓÃÖÐÖ»ÓÐÒ»¸öDevice¶ÔÏó
+static Device *device = NULL; // æ•´ä¸ªåº”ç”¨åªæœ‰ä¸€ä¸ªDeviceå¯¹è±¡
 
-// ½«ÏÂÐÐ»º³åÇøÊý¾ÝÐ´ÈëÀ¶ÑÀ´®¿ÚÎÄ¼þµÄÈÎÎñº¯Êý £¨Ïß³Ì³ØÖÐÄ³¸öÏß³Ìº¯Êýµ÷ÓÃ£©
-// Á½´ÎÐ´ÈëµÄÊ±¼ä²îÒª >= 200ms
+// å†™çº¿ç¨‹å‡½æ•°ï¼šä»Žä¸‹è¡Œç¼“å†²åŒºè¯»å–æ•°æ®å¹¶å†™å…¥è®¾å¤‡æ–‡ä»¶
+// æ³¨æ„ï¼šATæŽ§åˆ¶æŒ‡ä»¤å†™æ—¶é—´é—´éš”éœ€è¦ >= 200msï¼Œæ•°æ®è½¬å‘æ— é™åˆ¶
 static int write_thread_fun(void *arg)
 {
     Device *device = (Device *)arg;
-    // ´ÓÏÂÐÐ»º³åÇøÖÐ¶ÁÈ¡Ò»¸ö×Ö·ûÊý×émessageÊý¾Ý
+    // ä»Žä¸‹è¡Œç¼“å†²åŒºè¯»å–ä¸€ä¸ªå­—ç¬¦æ•°ç»„messageæ•°æ®
     char data_buf[128];
     int data_len = app_buffer_read(device->down_buffer, data_buf, sizeof(data_buf));
-    // ½«×Ö·ûÊý×émessage×ª»»ÎªÀ¶ÑÀÊý¾Ý
+
+    // åˆ¤æ–­æ¶ˆæ¯ç±»åž‹ï¼ˆè¿™é‡Œéœ€è¦æ ¹æ®å®žé™…ä¸šåŠ¡é€»è¾‘åˆ¤æ–­ï¼‰
+    msg_type_t msg_type = MSG_TYPE_DATA; // é»˜è®¤ä¸ºæ•°æ®è½¬å‘
+
+    // æ ¹æ®å®žé™…ä¸šåŠ¡é€»è¾‘åˆ¤æ–­æ¶ˆæ¯ç±»åž‹
+    // ä¾‹å¦‚ï¼šå¦‚æžœæ•°æ®ä»¥"AT"å¼€å¤´ï¼Œåˆ™ä¸ºATæŽ§åˆ¶æŒ‡ä»¤
+    if (data_len >= 2 && strncmp(data_buf, "AT", 2) == 0)
+    {
+        msg_type = MSG_TYPE_AT_CMD;
+    }
+
+    // å­—ç¬¦æ•°ç»„messageè½¬æ¢ä¸ºå­—èŠ‚æ•°ç»„
     if (device->pre_write)
     {
         data_len = device->pre_write(data_buf, data_len);
     }
 
-    // Ð´ÈëÎÄ¼þÇ°£¬ÏÞÖÆÁ½´ÎÐ´ÈëµÄÊ±¼ä²î >= 200
-    long distance = app_common_getCurrentTime() - device->last_write_time;
-    if (distance < 200)
+    // å†™æ–‡ä»¶å‰ï¼Œæ£€æŸ¥å†™æ—¶é—´é—´éš”
+    // åªæœ‰ATæŽ§åˆ¶æŒ‡ä»¤éœ€è¦ >= 200msé—´éš”
+    if (msg_type == MSG_TYPE_AT_CMD)
     {
-        usleep((200 - distance) * 1000);
+        long distance = app_common_getCurrentTime() - device->last_write_time;
+        if (distance < 200)
+        {
+            usleep((200 - distance) * 1000);
+        }
     }
+    // æ•°æ®è½¬å‘è·¯å¾„æ— å†™é—´éš”é™åˆ¶ï¼Œç›´æŽ¥å†™å…¥
 
-    // ½«À¶ÑÀÊý¾ÝÐ´ÈëÀ¶ÑÀ´®¿ÚÎÄ¼þ
+    // å°†å­—èŠ‚æ•°ç»„å†™å…¥è®¾å¤‡æ–‡ä»¶
     ssize_t len = write(device->fd, data_buf, data_len);
     if (len != data_len)
     {
@@ -42,19 +59,24 @@ static int write_thread_fun(void *arg)
         return -1;
     }
     log_debug("write to bluetooth serial success:%s", data_buf);
-    // ±£´æµ±Ç°Ê±¼ä
+
+    // ä¿å­˜å½“å‰æ—¶é—´å’Œæ¶ˆæ¯ç±»åž‹
     device->last_write_time = app_common_getCurrentTime();
+    device->last_msg_type = msg_type;
+
     return 0;
 }
-// ·¢ËÍÏûÏ¢µÄÈÎÎñº¯Êý £¨Ïß³Ì³ØÖÐÄ³¸öÏß³Ìº¯Êýµ÷ÓÃ£©
+
+// ä¸Šè¡Œæ¶ˆæ¯å¤„ç†å‡½æ•°ï¼šä»Žä¸Šè¡Œç¼“å†²åŒºè¯»å–æ•°æ®å¹¶å‘é€ç»™è¿œç¨‹
+// çº¿ç¨‹æ± çš„æŸä¸ªçº¿ç¨‹å‡½æ•°ä¼šè¢«è°ƒç”¨
 static int send_message_task(void *arg)
 {
-    // ´ÓÉÏÐÐ»º³åÇøÖÐ¶ÁÈ¡Ò»¸ö×Ö·ûÊý×émessageÊý¾Ý
+    // ä»Žä¸Šè¡Œç¼“å†²åŒºè¯»å–ä¸€ä¸ªå­—ç¬¦æ•°ç»„messageæ•°æ®
     char data_buf[128];
     int data_len = app_buffer_read(device->up_buffer, data_buf, sizeof(data_buf));
-    // ½«×Ö·ûÊý×émessage×ª»»Îªjson
+    // å­—ç¬¦æ•°ç»„messageè½¬æ¢ä¸ºjson
     char *json = app_message_chars2Json(data_buf, data_len);
-    // ½«jsonÊý¾Ý·¢ËÍ¸øÔ¶³Ì
+    // å°†jsonæ•°æ®å‘é€ç»™è¿œç¨‹
     int res = app_mqtt_send(json);
     if (res == -1)
     {
@@ -64,16 +86,17 @@ static int send_message_task(void *arg)
     log_debug("mqtt send success:%s", json);
     return 0;
 }
-// ²»¶Ï´Ó´®¿ÚÎÄ¼þÖÐ¶ÁÈ¡Êý¾ÝµÄÏß³Ìº¯Êý
+
+// ä¸“é—¨ä»Žè®¾å¤‡æ–‡ä»¶ä¸­è¯»å–æ•°æ®çš„çº¿ç¨‹å‡½æ•°
 static void *read_thread_fun(void *arg)
 {
     while (device->is_running)
     {
-        // ´Ó´®¿ÚÎÄ¼þÖÐ¶ÁÈ¡Êý¾Ý À¶ÑÀÊý¾Ý
+        // ä»Žè®¾å¤‡æ–‡ä»¶ä¸­è¯»å–æ•°æ®åˆ°ç¼“å†²åŒº
         char data_buf[128];
         ssize_t data_len = read(device->fd, data_buf, sizeof(data_buf));
-        // log_debug("------:%ld", data_len);
-        //  ½«À¶ÑÀÊý¾Ý×ª»»³É×Ö·ûÊý×éMessage
+
+        // å°†æ•°æ®è½¬æ¢ä¸ºå­—ç¬¦æ•°ç»„Message
         if (data_len > 0 && device->post_read)
         {
             data_len = device->post_read(data_buf, data_len);
@@ -81,34 +104,38 @@ static void *read_thread_fun(void *arg)
 
         if (data_len > 0)
         {
-            // ½«MessageÐ´ÈëÉÏÐÐ»º³åÇø
+            // å°†Messageå†™å…¥ä¸Šè¡Œç¼“å†²åŒº
             app_buffer_write(device->up_buffer, data_buf, data_len);
-            // ½«ÉÏÐÐ»º³åÇøÖÐµÄÊý¾Ý·¢ËÍ¸øÔ¶³Ì
+            // å°†ä¸Šè¡Œç¼“å†²åŒºä¸­çš„æ•°æ®å‘é€ç»™è¿œç¨‹
             app_pool_addTask(send_message_task, NULL);
         }
     }
+    return NULL;
 }
 
-// ´¦Àí½ÓÊÕµÄÔ¶³ÌÏûÏ¢µÄ»Øµ÷º¯Êý
+// å½“æ”¶åˆ°è¿œç¨‹æ¶ˆæ¯çš„å›žè°ƒå‡½æ•°
 static int recv_msg_callback(char *json)
 {
-    // jsonÏûÏ¢×ª»»Îª×Ö·ûÊý×éMessage
+    // jsonæ¶ˆæ¯è½¬æ¢ä¸ºå­—ç¬¦æ•°ç»„Message
     char data_buf[128];
     int data_len = app_message_json2Chars(json, data_buf, sizeof(data_buf));
-    // ½«MessageÐ´ÈëÏÂÐÐ»º³åÇø
+    // å°†Messageå†™å…¥ä¸‹è¡Œç¼“å†²åŒº
     app_buffer_write(device->down_buffer, data_buf, data_len);
-    // ½«ºóÃæÐ´ÈëÀ¶ÑÀ´®¿ÚÎÄ¼þµÄÈÎÎñ½»¸øÏß³Ì³ØÄ£¿éÍê³É £¨Ìí¼ÓÒ»¸ö½«ÏÂÐÐ»º³åÇøÊý¾ÝÐ´ÈëÀ¶ÑÀ´®¿ÚÎÄ¼þµÄÈÎÎñ£©
+    // å°†å†™è®¾å¤‡æ–‡ä»¶çš„ä»»åŠ¡äº¤ç»™çº¿ç¨‹æ± ï¼Œçº¿ç¨‹æ± ä¼šè°ƒåº¦æŸä¸ªçº¿ç¨‹æ¥æ‰§è¡Œ
+    // è¿™ä¸ªçº¿ç¨‹ä¼šä»Žä¸‹è¡Œç¼“å†²åŒºè¯»å–æ•°æ®å¹¶å†™å…¥è®¾å¤‡æ–‡ä»¶
     app_pool_addTask(write_thread_fun, device);
+    return 0;
 }
+
 Device *app_device_init(char *filename)
 {
     if (device)
     {
         return device;
     }
-    // ÉêÇëDeviceÄÚ´æ
+    // åˆ†é…Deviceå†…å­˜
     device = (Device *)malloc(sizeof(Device));
-    // ³õÊ¼»¯DeviceÖ¸Õë
+    // åˆå§‹åŒ–DeviceæŒ‡é’ˆ
     device->filename = filename;
     device->fd = open(filename, O_RDWR);
     device->up_buffer = app_buffer_init(BUFFER_SIZE);
@@ -116,13 +143,14 @@ Device *app_device_init(char *filename)
     device->is_running = 0;
     device->post_read = NULL;
     device->pre_write = NULL;
+    device->last_write_time = 0;           // åˆå§‹åŒ–ä¸º0
+    device->last_msg_type = MSG_TYPE_DATA; // åˆå§‹åŒ–ä¸ºæ•°æ®ç±»åž‹
 
-    // ³õÊ¼»¯Ïß³Ì³Ø
+    // åˆå§‹åŒ–çº¿ç¨‹æ± 
     app_pool_init(5);
-    // ³õÊ¼»¯MQTTÄ£¿é
+    // åˆå§‹åŒ–MQTTæ¨¡å—
     app_mqtt_init();
-
-    // ·µ»ØDeviceÖ¸Õë
+    // è¿”å›žDeviceæŒ‡é’ˆ
     return device;
 }
 
@@ -134,31 +162,28 @@ int app_device_start()
         return 0;
     }
     device->is_running = 1;
-    // Æô¶¯ÉÏÐÐÁ÷³Ì£º Æô¶¯¶ÁÏß³Ì
+    // åˆ›å»ºè¯»å–çº¿ç¨‹
     pthread_create(&device->read_thread, NULL, read_thread_fun, NULL);
-    // Æô¶¯ÏÂÐÐÁ÷³Ì£º ¸øMQTTÄ£¿é×¢²áÒ»¸ö½ÓÊÕÔ¶³ÌÏûÏ¢µÄ»Øµ÷º¯Êý
+    // å¯åŠ¨MQTTæ¨¡å—ï¼Œæ³¨å†Œä¸€ä¸ªæŽ¥æ”¶è¿œç¨‹æ¶ˆæ¯çš„å›žè°ƒå‡½æ•°
     app_mqtt_registerRecvCallback(recv_msg_callback);
     return 0;
 }
 
 int app_device_close()
 {
-    // ¹Ø±ÕÎÄ¼þ
+    // å…³é—­æ–‡ä»¶
     close(device->fd);
-    // ÊÍ·Åbuffer
+    // é‡Šæ”¾buffer
     app_buffer_free(device->up_buffer);
     app_buffer_free(device->down_buffer);
-
-    // È¡Ïû¶ÁÏß³Ì
+    // å–æ¶ˆçº¿ç¨‹
     pthread_cancel(device->read_thread);
     pthread_join(device->read_thread, NULL);
-    // ÊÍ·ÅDevice
+    // é‡Šæ”¾Device
     free(device);
-
-    // ¹Ø±ÕÏß³Ì³Ø
+    // å…³é—­çº¿ç¨‹æ± 
     app_pool_destroy();
-
-    // ¹Ø±ÕMQTT
+    // å…³é—­MQTT
     app_mqtt_close();
     return 0;
 }
