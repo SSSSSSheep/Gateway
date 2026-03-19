@@ -105,4 +105,13 @@ int app_pool_set_downsample_interval(uint32_t interval_ms);
  */
 int app_pool_report_backpressure_stats(void);
 
+/**
+ * @brief 尝试发送合并后的任务
+ * @brief 这个函数应该在任务处理完成后调用，以尝试发送合并后的任务
+ *
+ * @param type 任务类型
+ * @return int 0成功，-1失败
+ */
+int app_pool_try_send_merged_task(job_type_t type);
+
 #endif // !__APP_POOL_H__
