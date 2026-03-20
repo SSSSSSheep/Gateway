@@ -1,7 +1,10 @@
 #include "app_buffer.h"
 #include "log/log.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define BUFFER_THRESHOLD_PERCENT 80 // 缓冲区阈值百分比
 
 // 初始化子缓冲区
 static SubBuffer *init_sub_buffer(int size)
@@ -71,9 +74,22 @@ int app_buffer_write(Buffer *buffer, char *data, int data_len)
     SubBuffer *w_buffer = buffer->sub_buffers[buffer->write_index];
 
     // 判断写缓冲区剩余空间是否足够
+    uint32_t usage_percent = (w_buffer->total_size - w_buffer->len) * 100 / w_buffer->total_size;
+    if (usage_percent < BUFFER_THRESHOLD_PERCENT)
+    {
+        log_warn("Buffer usage %u%% exceeds threshold %u%%, discarding old data",
+                 usage_percent, BUFFER_THRESHOLD_PERCENT);
+
+        // 丢弃旧数据，为新数据腾出空间
+        uint32_t discard_len = w_buffer->len - (w_buffer->total_size * (100 - BUFFER_THRESHOLD_PERCENT) / 100);
+        memmove(w_buffer->ptr, w_buffer->ptr + discard_len, w_buffer->len - discard_len);
+        w_buffer->len -= discard_len;
+    }
+
+    // 检查剩余空间是否足够
     if (w_buffer->total_size - w_buffer->len < data_len + 1)
     {
-        log_error("write buffer is not enough");
+        log_error("Buffer is full");
         pthread_mutex_unlock(&buffer->write_lock);
         return -1;
     }

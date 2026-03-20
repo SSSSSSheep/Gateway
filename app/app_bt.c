@@ -4,42 +4,248 @@
 #include "log/log.h"
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+
+static Device *g_bt_device = NULL;
+
+// è·å–å½“å‰æ—¶é—´ï¼ˆæ¯«ç§’ï¼‰
+static uint64_t get_current_time_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// è“ç‰™æ•°æ®æ¥æ”¶å›è°ƒå‡½æ•°
+static ack_tracker_t ack_trackers[MAX_PENDING_ACKS];
+// è“ç‰™æ•°æ®æ¥æ”¶å›è°ƒå‡½æ•°çš„ç´¢å¼•
+static uint8_t next_tracker_index = 0;
+
+// æ¥æ”¶ç¼“å†²åŒº
+static char read_buf[1024];
+static int read_len = 0;
+
+// FSM å½“å‰çŠ¶æ€
+static fsm_state_t current_state = FSM_STATE_IDLE;
+
+// FSM è§£æä½ç½®
+static int parse_pos = 0;
+
+// FSM ä¸´æ—¶å­˜å‚¨çš„æ•°æ®
+static uint8_t temp_len = 0;
+static uint16_t temp_id = 0;
+
+/**
+ * @brief é‡ç½®è“ç‰™æ¨¡å—çš„å†…éƒ¨çŠ¶æ€
+ * 
+ * è¿™ä¸ªå‡½æ•°ç”¨äºé‡ç½®æ¥æ”¶ç¼“å†²åŒºã€FSMçŠ¶æ€å’ŒACKè·Ÿè¸ªå™¨ç­‰å†…éƒ¨çŠ¶æ€ã€‚
+ * ä¸»è¦ç”¨äºæµ‹è¯•åœºæ™¯ï¼Œæˆ–è€…åœ¨é€šä¿¡å‡ºç°ä¸¥é‡é”™è¯¯æ—¶é‡ç½®çŠ¶æ€ã€‚
+ */
+void app_bt_reset_internal_state(void)
+{
+    // æ¸…ç©ºæ¥æ”¶ç¼“å†²åŒº
+    read_len = 0;
+    memset(read_buf, 0, sizeof(read_buf));
+
+    // é‡ç½®FSMçŠ¶æ€
+    current_state = FSM_STATE_IDLE;
+    parse_pos = 0;
+    temp_len = 0;
+    temp_id = 0;
+
+    // é‡ç½®ACKè·Ÿè¸ªå™¨
+    memset(ack_trackers, 0, sizeof(ack_trackers));
+    next_tracker_index = 0;
+
+    log_debug("Bluetooth internal state reset");
+}
+
+// åœ¨å¤„ç†ACKçš„å‡½æ•°ä¸­æ·»åŠ æ ¡éªŒé€»è¾‘
+// å‰å‘å£°æ˜
+static void trigger_resync(Device *device);
+
+int app_bt_add_tracker(Device *device, const char *data, int data_len)
+{
+    // æ‰¾åˆ°å¯ç”¨çš„è·Ÿè¸ªå™¨
+    int tracker_index = -1;
+    for (int i = 0; i < MAX_PENDING_ACKS; i++)
+    {
+        if (ack_trackers[i].ack_received || ack_trackers[i].packet_id == 0)
+        {
+            tracker_index = i;
+            break;
+        }
+    }
+
+    if (tracker_index == -1)
+    {
+        log_error("No available tracker slot");
+        return -1;
+    }
+
+    // è¯»å–åŒ…ID
+    uint16_t packet_id;
+    memcpy(&packet_id, data + 8, 2);
+
+    // åˆå§‹åŒ–è·Ÿè¸ªå™¨
+    ack_trackers[tracker_index].packet_id = packet_id;
+    ack_trackers[tracker_index].retry_count = 0;
+    ack_trackers[tracker_index].ack_received = 0;
+    ack_trackers[tracker_index].data_len = data_len;
+    memcpy(ack_trackers[tracker_index].data, data, data_len);
+    clock_gettime(CLOCK_MONOTONIC, &ack_trackers[tracker_index].send_time);
+
+    return 0;
+}
+
+static int check_and_retry(void)
+{
+    uint64_t current_time = get_current_time_ms();
+
+    for (int i = 0; i < MAX_PENDING_ACKS; i++)
+    {
+        if (!ack_trackers[i].ack_received && ack_trackers[i].packet_id != 0)
+        {
+            uint64_t send_time_ms = (uint64_t)ack_trackers[i].send_time.tv_sec * 1000 +
+                                    ack_trackers[i].send_time.tv_nsec / 1000000;
+            uint64_t elapsed = current_time - send_time_ms;
+
+            if (elapsed > RETRY_TIMEOUT_MS)
+            {
+                if (ack_trackers[i].retry_count < MAX_RETRY_COUNT)
+                {
+                    // é‡è¯•å‘é€
+                    ack_trackers[i].retry_count++;
+                    clock_gettime(CLOCK_MONOTONIC, &ack_trackers[i].send_time);
+                    // é‡æ–°å‘é€æ•°æ®
+                    int written = write(g_bt_device->fd, ack_trackers[i].data, ack_trackers[i].data_len);
+                    if (written != ack_trackers[i].data_len)
+                    {
+                        log_error("Failed to retry packet ID: %d", ack_trackers[i].packet_id);
+                        return -1;
+                    }
+                    log_info("Retry packet ID: %d, retry count: %d",
+                             ack_trackers[i].packet_id, ack_trackers[i].retry_count);
+                }
+                else
+                {
+                    // è¶…è¿‡æœ€å¤§é‡è¯•æ¬¡æ•°ï¼Œè§¦å‘é‡åŒæ­¥
+                    log_error("Max retry count reached for packet ID: %d",
+                              ack_trackers[i].packet_id);
+                    trigger_resync(g_bt_device);
+                    return -1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// å…¬å…±å‡½æ•°ï¼šæ£€æŸ¥è¶…æ—¶å¹¶é‡è¯•
+int app_bt_check_and_retry(Device *device)
+{
+    // æ›´æ–°å…¨å±€è®¾å¤‡æŒ‡é’ˆ
+    if (device != NULL) {
+        g_bt_device = device;
+    }
+    return check_and_retry();
+}
+
+static int is_ack_timeout(const ack_tracker_t *tracker, uint32_t timeout_ms)
+{
+    uint64_t current_time = get_current_time_ms();
+    uint64_t send_time_ms = (uint64_t)tracker->send_time.tv_sec * 1000 + tracker->send_time.tv_nsec / 1000000;
+    uint64_t elapsed = current_time - send_time_ms;
+    return elapsed > timeout_ms;
+}
+
+static void trigger_resync(Device *device)
+{
+    // å®ç°é‡åŒæ­¥é€»è¾‘ï¼Œä¾‹å¦‚é‡æ–°å‘é€æœªç¡®è®¤çš„æ•°æ®åŒ…
+    log_error("trigger_resync");
+
+    // 1. æ¸…ç©ºæ¥æ”¶ç¼“å†²åŒº
+    read_len = 0;
+    memset(read_buf, 0, sizeof(read_buf));
+
+    // 2. é‡ç½®æ‰€æœ‰ACKè·Ÿè¸ªå™¨
+    memset(ack_trackers, 0, sizeof(ack_trackers));
+    next_tracker_index = 0;
+
+    // 3. é‡ç½®FSMçŠ¶æ€
+    current_state = FSM_STATE_IDLE;
+    parse_pos = 0;
+
+    // 4. åˆ·æ–°ä¸²å£ç¼“å†²åŒºï¼ˆå¦‚æœdeviceä¸ä¸ºNULLï¼‰
+    if (device != NULL)
+    {
+        app_serial_flush(device);
+    }
+    log_info("Resync completed");
+}
+
+int process_ack(uint16_t packet_id)
+{
+    // æŸ¥æ‰¾å¯¹åº”çš„åŒ…ID
+    for (int i = 0; i < MAX_PENDING_ACKS; i++)
+    {
+        if (ack_trackers[i].packet_id == packet_id && !ack_trackers[i].ack_received)
+        {
+            // æ£€æŸ¥æ˜¯å¦è¶…æ—¶
+            if (is_ack_timeout(&ack_trackers[i], ACK_TIMEOUT_MS))
+            {
+                log_error("ACK timeout for packet ID: %d", packet_id);
+                // è§¦å‘é‡åŒæ­¥
+                // æ³¨æ„ï¼šè¿™é‡Œæ²¡æœ‰deviceå‚æ•°ï¼Œéœ€è¦æ ¹æ®å®é™…æƒ…å†µè°ƒæ•´
+                return -1;
+            }
+            // æ ‡è®°ä¸ºå·²æ¥å—
+            ack_trackers[i].ack_received = 1;
+            return 0;
+        }
+    }
+
+    // æœªæ‰¾åˆ°å¯¹åº”çš„åŒ…ID
+    log_error("ACK for unknown packet ID: %d", packet_id);
+    // æ³¨æ„ï¼šè¿™é‡Œæ²¡æœ‰deviceå‚æ•°ï¼Œéœ€è¦æ ¹æ®å®é™…æƒ…å†µè°ƒæ•´
+    return -1;
+}
 
 static int init_bluetooth(Device *device)
 {
-    // ³õÊ¼»¯´®¿Ú
+    // åˆå§‹åŒ–ä¸²å£
     app_serial_init(device);
 
-    // ÉèÖÃ´®¿ÚÎª·Ç×èÈûÄ£Ê½
+    // è®¾ç½®ä¸²å£ä¸ºéé˜»å¡æ¨¡å¼
     app_serial_setBlockMode(device, 0);
     app_serial_flush(device);
 
-    // ´®¿ÚµÄ²¨ÌØÂÊµ±Ç°ÊÇ9600
-    // Èç¹ûµ±Ç°À¶ÑÀ¿ÉÓÃ£¬ËµÃ÷µ±Ç°µÄ²¨ÌØÂÊÎª9600
+    // ä¸²å£çš„æ³¢ç‰¹ç‡å½“å‰æ˜¯9600
+    // å¦‚æœå½“å‰è“ç‰™å¯ç”¨ï¼Œè¯´æ˜å½“å‰çš„æ³¢ç‰¹ç‡ä¸º9600
     if (app_bt_status(device) == 0)
     {
-        // ½«À¶ÑÀµÄ²¨ÌØÂÊÉèÖÃÎª115200
+        // å°†è“ç‰™çš„æ³¢ç‰¹ç‡è®¾ç½®ä¸º115200
         app_bt_setBaudRate(device, BT_BR_115200);
-        // ÖØÆôÀ¶ÑÀÉè±¸
+        // é‡å¯è“ç‰™è®¾å¤‡
         app_bt_reset(device);
-        // µÈ´ıÀ¶ÑÀÉè±¸ÖØÆôÍê³É
+        // ç­‰å¾…è“ç‰™è®¾å¤‡é‡å¯å®Œæˆ
         sleep(2);
     }
-    // ½«´®¿ÚµÄ²¨ÌØÂÊÉèÖÃÎª115200
+    // å°†ä¸²å£çš„æ³¢ç‰¹ç‡è®¾ç½®ä¸º115200
     app_serial_setBaudRate(device, BR_115200);
     app_serial_flush(device);
 
-    // ÅĞ¶ÏÀ¶ÑÀÊÇ·ñ¿ÉÓÃ Èç¹û²»¿ÉÓÃ ·µ»Ø-1
+    // åˆ¤æ–­è“ç‰™æ˜¯å¦å¯ç”¨ å¦‚æœä¸å¯ç”¨ è¿”å›-1
     if (app_bt_status(device) != 0)
     {
         log_error("bluetooth is not available");
         return -1;
     }
-    // ÉèÖÃ×éÍøID: ×éÄÚÏàÍ¬ ×é¼ä²»Í¬
+    // è®¾ç½®ç»„ç½‘ID: ç»„å†…ç›¸åŒ ç»„é—´ä¸åŒ
     app_bt_setNetId(device, "1111");
-    // ÉèÖÃMACµØÖ·: ×éÄÚ²»Í¬ ×é¼ä¿ÉÒÔÏàÍ¬
+    // è®¾ç½®MACåœ°å€: ç»„å†…ä¸åŒ ç»„é—´å¯ä»¥ç›¸åŒ
     app_bt_setMaddr(device, "0001");
-    // ½«´®¿ÚÉèÖÃÎª×èÈûÄ£Ê½
+    // å°†ä¸²å£è®¾ç½®ä¸ºé˜»å¡æ¨¡å¼
     app_serial_setBlockMode(device, 1);
     app_serial_flush(device);
 
@@ -48,55 +254,62 @@ static int init_bluetooth(Device *device)
 }
 
 /**
- * À¶ÑÀÄ£¿é³õÊ¼»¯
- * 1. ¸øÉè±¸Ö¸¶¨perWriteºÍpostReadÁ½¸öº¯Êı
- * 2. À¶ÑÀÁ¬½Ó³õÊ¼»¯ÅäÖÃ
+ * è“ç‰™æ¨¡å—åˆå§‹åŒ–
+ * 1. ç»™è®¾å¤‡æŒ‡å®šperWriteå’ŒpostReadä¸¤ä¸ªå‡½æ•°
+ * 2. è“ç‰™è¿æ¥åˆå§‹åŒ–é…ç½®
  */
 int app_bt_init(Device *device)
 {
     device->post_read = app_bt_postRead;
     device->pre_write = app_bt_preWrite;
 
-    // ³õÊ¼»¯À¶ÑÀ
+    // åˆå§‹åŒ–è“ç‰™
     return init_bluetooth(device);
 }
 
 int app_bt_preWrite(char *data, int data_len)
 {
-    // ¼ì²édataÊı¾İÊÜ·ñºÏ·¨
+    // æ£€æŸ¥dataæ•°æ®å—å¦åˆæ³•
     if (data_len < 6)
     {
         log_error("data_len is too short(6)");
         return -1;
     }
-    // ¼ÆËãÀ¶ÑÀÊı¾İµÄ³¤¶È
+    // è®¡ç®—è“ç‰™æ•°æ®çš„é•¿åº¦
     int blue_len = 8 + 2 + data[2] + 2;
-    // ´´½¨À¶ÑÀÊı¾İÊı×é
+
+    // æ£€æŸ¥é•¿åº¦æ˜¯å¦åˆæ³•
+    if (blue_len > MAXX_BLUE_DATA_LEN)
+    {
+        log_error("blue_len is too large: %d", blue_len);
+    }
+
+    // åˆ›å»ºè“ç‰™æ•°æ®æ•°ç»„
     char blue_data[blue_len];
-    // ¸ù¾İdataÖĞµÄÊı¾İ×é×°À¶ÑÀÊı¾İ
+
+    // æ ¹æ®dataä¸­çš„æ•°æ®ç»„è£…è“ç‰™æ•°æ®
     // data: 1 2 3 XX abc
     // blue_data: AT+MESH XX abc \r\n
-    // ¿½±´AT+MESH
+    // æ‹·è´AT+MESH
     memcpy(blue_data, "AT+MESH", 8);
-    // ¿½±´id
+    // æ‹·è´id
     memcpy(blue_data + 8, data + 3, 2);
-    // ¿½±´message
+    // æ‹·è´message
     memcpy(blue_data + 10, data + 5, data[2]);
-    // ¿½±´\r\n
+    // æ‹·è´\r\n
     memcpy(blue_data + 10 + data[2], "\r\n", 2);
-    // Çå¿ÕdataÖĞµÄÊı¾İ
+
+    // æ¸…ç©ºdataä¸­çš„æ•°æ®
     memset(data, 0, data_len);
-    // ½«À¶ÑÀÊı¾İ¿½±´µ½dataÖĞ
+    // å°†è“ç‰™æ•°æ®æ‹·è´åˆ°dataä¸­
     memcpy(data, blue_data, blue_len);
-    // ·µ»ØÀ¶ÑÀÊı¾İµÄ³¤¶È
+    // è¿”å›è“ç‰™æ•°æ®çš„é•¿åº¦
     return blue_len;
 }
 
-static char read_buf[1024];                 // »º´æ¶ÁÈ¡µÄÀ¶ÑÀÊı¾İ
-static int read_len = 0;                    // ÒÑ¶ÁÈ¡Êı¾İµÄ³¤¶È
-static char fixed_header[2] = {0xf1, 0xdd}; // ¹Ì¶¨Í·²¿
+static char fixed_header[2] = {0xf1, 0xdd}; // å›ºå®šå¤´éƒ¨
 
-// É¾³ı»º´æÖĞÖ¸¶¨³¤¶ÈÊı¾İ
+// åˆ é™¤ç¼“å­˜ä¸­æŒ‡å®šé•¿åº¦æ•°æ®
 static void remove_data(int len)
 {
     memmove(read_buf, read_buf + len, read_len - len);
@@ -105,76 +318,181 @@ static void remove_data(int len)
 
 int app_bt_postRead(char *data, int data_len)
 {
-    // ½«µ±Ç°Êı¾İÌí¼Óµ½»º´æÖĞ
-    memcpy(read_buf + read_len, data, data_len);
-    read_len += data_len;
+    // data_len å‚æ•°çš„å«ä¹‰ï¼š
+    // - è¾“å…¥æ—¶ï¼šè¡¨ç¤ºè¾“å…¥æ•°æ®çš„é•¿åº¦
+    // - è¾“å‡ºæ—¶ï¼šè¡¨ç¤ºè¾“å‡ºç¼“å†²åŒºçš„å¤§å°
 
-    // Èç¹ûµ±Ç°ÒÑ¶ÁÊı¾İµÄ³¤¶ÈĞ¡ÓÚ8£¬¶Áµ½µÄÀ¶ÑÀÊı¾İ²»ÍêÕû£¬Ö±½Ó·µ»Ø0
-    if (read_len < 8)
+    log_debug("app_bt_postRead called: data_len=%d, read_len=%d, current_state=%d", 
+              data_len, read_len, current_state);
+
+    // æ£€æŸ¥ç¼“å†²åŒºæ˜¯å¦è¶…è¿‡ä¸Šé™
+    // æ³¨æ„ï¼šè¿™é‡Œéœ€è¦æ£€æŸ¥çš„æ˜¯è¾“å…¥æ•°æ®çš„é•¿åº¦ï¼Œè€Œä¸æ˜¯è¾“å‡ºç¼“å†²åŒºçš„å¤§å°
+    // ç”±äº data_len æ—¢è¡¨ç¤ºè¾“å…¥é•¿åº¦åˆè¡¨ç¤ºè¾“å‡ºç¼“å†²åŒºå¤§å°ï¼Œæˆ‘ä»¬éœ€è¦ä¿å­˜è¾“å…¥é•¿åº¦
+
+    // ä¸ºäº†æ­£ç¡®å¤„ç†ï¼Œæˆ‘ä»¬éœ€è¦åœ¨å‡½æ•°å¼€å§‹æ—¶ä¿å­˜è¾“å…¥æ•°æ®çš„é•¿åº¦
+    // ä½†ç”±äºå‡½æ•°ç­¾åé™åˆ¶ï¼Œæˆ‘ä»¬æ— æ³•åŒºåˆ†è¾“å…¥å’Œè¾“å‡º
+    // è§£å†³æ–¹æ¡ˆï¼šå‡è®¾ data_len æ˜¯è¾“å…¥æ•°æ®çš„é•¿åº¦ï¼Œç”¨äºæ£€æŸ¥ç¼“å†²åŒºæº¢å‡º
+    // ç„¶ååœ¨è¾“å‡ºæ—¶ï¼Œå‡è®¾ data_len ä¹Ÿæ˜¯è¾“å‡ºç¼“å†²åŒºçš„å¤§å°
+
+    if (read_len + data_len > MAX_RECV_BUFFER_SIZE)
     {
-        log_debug("current read bluetooth data is too short(less than 8 bytes), contiue read");
+        log_error("Receive buffer overflow, read_len=%d, data_len=%d, max=%d", 
+                  read_len, data_len, MAX_RECV_BUFFER_SIZE);
+        // æ¸…ç©ºè¯»ç¼“å†²åŒºå’Œé‡ç½®çŠ¶æ€
+        read_len = 0;
+        memset(read_buf, 0, sizeof(read_buf));
+        memset(ack_trackers, 0, sizeof(ack_trackers));
+        next_tracker_index = 0;
+        current_state = FSM_STATE_IDLE;
+        parse_pos = 0;
         return 0;
     }
 
-    // ±éÀú²éÕÒÍêÕûµÄÀ¶ÑÀÊı¾İ
-    int i;
-    for (i = 0; i < read_len - 7; i++)
-    {
-        // ²éÕÒ¿ªÍ·fixed_header
-        if (memcmp(read_buf + i, fixed_header, 2) == 0)
-        {
-            // Ö®Ç°µÄÊı¾İ¶¼ÊÇÎŞĞ§Êı¾İ£¬É¾³ıËûÃÇ
-            if (i > 0)
-            {
-                remove_data(i);
-                // Èç¹û»º´æÊı¾İ³¤¶È Ğ¡ÓÚ8£¬¼ÌĞø¶ÁÈ¡
-                if (read_len < 8)
-                {
-                    log_debug("current read bluetooth data is too short(less than 8 bytes)2, contiue read");
-                    return 0;
-                }
-            }
+    // å°†å½“å‰æ•°æ®æ·»åŠ åˆ°ç¼“å­˜ä¸­
+    memcpy(read_buf + read_len, data, data_len);
+    read_len += data_len;
 
-            // ÓĞ8Î»²»´ú±íµ±Ç°À¶ÑÀÊı¾İÊÇÍêÕûµÄ
-            int blue_len = 3 + read_buf[2];
-            if (read_len < blue_len)
-            {
-                log_debug("current read bluetooth data is too short 3, contiue read");
-                return 0;
-            }
+    log_debug("Added data to buffer: new read_len=%d", read_len);
 
-            // ¸ù¾İ»º´æÖĞÀ¶ÑÀÊı¾İÉú³É×Ö·ûÊı×éÏûÏ¢
-            memset(data, 0, data_len);
-            data[0] = 1;                             // conn_type;
-            data[1] = 2;                             // id_len;
-            data[2] = blue_len - 7;                  // msg_len;
-            memcpy(data + 3, read_buf + 3, 2);       // id;
-            memcpy(data + 5, read_buf + 7, data[2]); // msg;
-
-            // É¾³ı»º´æÖĞÒÑ´¦ÀíµÄÀ¶ÑÀÊı¾İ
-            remove_data(blue_len);
-
-            // ·µ»ØÏûÏ¢µÄ³¤¶È
-            return data[2] + 5;
+    // æ‰“å°ç¼“å†²åŒºçš„å‰16ä¸ªå­—èŠ‚ï¼Œç”¨äºè°ƒè¯•
+    if (read_len > 0) {
+        char hex_str[64];
+        int hex_len = read_len < 16 ? read_len : 16;
+        for (int i = 0; i < hex_len; i++) {
+            sprintf(hex_str + i*3, "%02x ", (unsigned char)read_buf[i]);
         }
+        log_debug("Buffer content (first %d bytes): %s", hex_len, hex_str);
     }
 
-    // ±éÀúµÄÊı¾İ¶¼ÊÇÎŞĞ§Êı¾İ£¬É¾³ıËûÃÇ
-    remove_data(i);
+    // ä½¿ç”¨ FSM è§£ææ•°æ®
+    int processed = 0;
+    log_debug("Starting FSM parsing: processed=%d, read_len=%d, state=%d", 
+              processed, read_len, current_state);
+    while (processed < read_len)
+    {
+        switch (current_state)
+        {
+        case FSM_STATE_IDLE:
+            // ç­‰å¾…å›ºå®šå¤´éƒ¨ 0xf1 0xdd
+            unsigned char current_byte = (unsigned char)read_buf[processed];
+            unsigned char next_byte = (processed + 1 < read_len) ? (unsigned char)read_buf[processed + 1] : 0;
+            log_debug("FSM IDLE: processed=%d, read_len=%d, byte=0x%02x, next_byte=0x%02x", 
+                      processed, read_len, current_byte, next_byte);
+
+            // æ£€æŸ¥æ¡ä»¶
+            int cond1 = (current_byte == 0xf1);
+            int cond2 = (processed + 1 < read_len);
+            int cond3 = (next_byte == 0xdd);
+            log_debug("FSM IDLE conditions: cond1=%d (0x%02x==0xf1), cond2=%d (%d<%d), cond3=%d (0x%02x==0xdd)", 
+                      cond1, current_byte, cond2, processed + 1, read_len, cond3, next_byte);
+
+            if (cond1 && cond2 && cond3)
+            {
+                log_debug("Found header at position %d", processed);
+                current_state = FSM_STATE_WAIT_LENGTH;
+                parse_pos = processed + 2;
+                processed += 2;
+            }
+            else
+            {
+                processed++;
+            }
+            break;
+
+        case FSM_STATE_WAIT_LENGTH:
+            // è¯»å–é•¿åº¦å­—æ®µ
+            if (parse_pos < read_len)
+            {
+                temp_len = read_buf[parse_pos];
+                log_debug("Read length: %d at position %d", temp_len, parse_pos);
+                // æ£€æŸ¥é•¿åº¦æ˜¯å¦åˆæ³•
+                if (temp_len > 250)
+                { // å‡è®¾æœ€å¤§é•¿åº¦ä¸º250
+                    log_error("Invalid length: %d, triggering resync", temp_len);
+                    trigger_resync(g_bt_device);
+                    return 0;
+                }
+                current_state = FSM_STATE_WAIT_DATA;
+                parse_pos++;
+            }
+            else
+            {
+                log_debug("Waiting for more data, parse_pos=%d, read_len=%d", parse_pos, read_len);
+                processed = read_len; // ç­‰å¾…æ›´å¤šæ•°æ®
+            }
+            break;
+
+        case FSM_STATE_WAIT_DATA:
+            // æ£€æŸ¥æ˜¯å¦æœ‰è¶³å¤Ÿçš„æ•°æ®
+            if (parse_pos + temp_len <= read_len)
+            {
+                log_debug("Have enough data: parse_pos=%d, temp_len=%d, read_len=%d", 
+                          parse_pos, temp_len, read_len);
+                // è¯»å–ID
+                if (temp_len >= 2)
+                {
+                    memcpy(&temp_id, read_buf + parse_pos, 2);
+                    log_debug("Read packet ID: %d", temp_id);
+                }
+
+                // æ£€æŸ¥è¾“å‡ºç¼“å†²åŒºæ˜¯å¦è¶³å¤Ÿ
+                int output_len = temp_len + 3; // conn_type(1) + id_len(1) + msg_len(1) + id(2) + msg(temp_len-2)
+                if (data_len < output_len)
+                {
+                    log_error("Output buffer too small: need %d, have %d", output_len, data_len);
+                    trigger_resync(g_bt_device);
+                    return 0;
+                }
+
+                // æ„é€ è¾“å‡ºæ•°æ®
+                memset(data, 0, data_len);
+                data[0] = 1;                                              // conn_type;
+                data[1] = 2;                                              // id_len;
+                data[2] = temp_len - 2;                                   // msg_len;
+                memcpy(data + 3, read_buf + parse_pos, 2);                // id;
+                memcpy(data + 5, read_buf + parse_pos + 2, temp_len - 2); // msg;
+
+                // åˆ é™¤å·²å¤„ç†çš„æ•°æ®
+                int total_len = parse_pos + temp_len;
+                memmove(read_buf, read_buf + total_len, read_len - total_len);
+                read_len -= total_len;
+
+                // é‡ç½®FSMçŠ¶æ€
+                current_state = FSM_STATE_IDLE;
+                parse_pos = 0;
+
+                log_debug("Returning parsed packet, length=%d", output_len);
+                // è¿”å›æ¶ˆæ¯çš„é•¿åº¦
+                return temp_len + 3;
+            }
+            else
+            {
+                log_debug("Waiting for more data: parse_pos=%d, temp_len=%d, read_len=%d", 
+                          parse_pos, temp_len, read_len);
+                processed = read_len; // ç­‰å¾…æ›´å¤šæ•°æ®
+            }
+            break;
+
+        case FSM_STATE_ERROR:
+            log_error("FSM error state, triggering resync");
+            trigger_resync(g_bt_device);
+            return 0;
+        }
+    }
 
     return 0;
 }
 
-// ÅĞ¶ÏÊÇ·ñÊÕµ½ACKÖ¸Áî
+// åˆ¤æ–­æ˜¯å¦æ”¶åˆ°ACKæŒ‡ä»¤
 int wait_ack(int fd)
 {
-    // µÈ´ıÒ»¶¨Ê±¼ä
+    // ç­‰å¾…ä¸€å®šæ—¶é—´
     usleep(50 * 1000);
-    // ¶ÁÈ¡Êı¾İ
+    // è¯»å–æ•°æ®
     char data_buf[4];
     read(fd, data_buf, 4);
-    // ÅĞ¶ÏÊÇ·ñÊÇOK\r\n
-    if (memcmp(data_buf, "OK\r\n", 4) == -1)
+    // åˆ¤æ–­æ˜¯å¦æ˜¯OK\r\n
+    if (memcmp(data_buf, "OK\r\n", 4) != 0)
     {
         log_error("wait_ack failed");
         return -1;
@@ -185,62 +503,62 @@ int wait_ack(int fd)
 
 int app_bt_status(Device *device)
 {
-    // ÏòÀ¶ÑÀ´®¿ÚÎÄ¼şÖĞĞ´Èë"AT\r\n"µÄÖ¸ÁîÊı¾İ
+    // å‘è“ç‰™ä¸²å£æ–‡ä»¶ä¸­å†™å…¥"AT\r\n"çš„æŒ‡ä»¤æ•°æ®
     write(device->fd, "AT\r\n", 4);
-    // Í¨¹ı¶ÁÈ¡"OK\r\n"Êı¾İ£¬ÅĞ¶ÏÀ¶ÑÀÊÇ·ñ¿ÉÓÃ
+    // é€šè¿‡è¯»å–"OK\r\n"æ•°æ®ï¼Œåˆ¤æ–­è“ç‰™æ˜¯å¦å¯ç”¨
     return wait_ack(device->fd);
 }
 
 int app_bt_rename(Device *device, char *name)
 {
-    // Æ´½ÓÖ¸Áî
+    // æ‹¼æ¥æŒ‡ä»¤
     char cmd[20];
     sprintf(cmd, "AT+NAME%s\r\n", name);
-    // Ğ´ÈëÖ¸Áî
+    // å†™å…¥æŒ‡ä»¤
     write(device->fd, cmd, strlen(cmd));
-    // µÈ´ıACK
+    // ç­‰å¾…ACK
     return wait_ack(device->fd);
 }
 
 int app_bt_setBaudRate(Device *device, BT_BaudRate baudRate)
 {
-    // Æ´½ÓÖ¸Áî
+    // æ‹¼æ¥æŒ‡ä»¤
     char cmd[20];
     sprintf(cmd, "AT+BAUD%c\r\n", baudRate);
-    // Ğ´ÈëÖ¸Áî
+    // å†™å…¥æŒ‡ä»¤
     write(device->fd, cmd, strlen(cmd));
-    // µÈ´ıACK
+    // ç­‰å¾…ACK
     return wait_ack(device->fd);
 }
 
 int app_bt_reset(Device *device)
 {
-    // Æ´½ÓÖ¸Áî
+    // æ‹¼æ¥æŒ‡ä»¤
     char *cmd = "AT+RESET\r\n";
-    // Ğ´ÈëÖ¸Áî
+    // å†™å…¥æŒ‡ä»¤
     write(device->fd, cmd, strlen(cmd));
-    // µÈ´ıACK
+    // ç­‰å¾…ACK
     return wait_ack(device->fd);
 }
 
 int app_bt_setNetId(Device *device, char *netid)
 {
-    // Æ´½ÓÖ¸Áî
+    // æ‹¼æ¥æŒ‡ä»¤
     char cmd[20];
     sprintf(cmd, "AT+NETID%s\r\n", netid);
-    // Ğ´ÈëÖ¸Áî
+    // å†™å…¥æŒ‡ä»¤
     write(device->fd, cmd, strlen(cmd));
-    // µÈ´ıACK
+    // ç­‰å¾…ACK
     return wait_ack(device->fd);
 }
 
 int app_bt_setMaddr(Device *device, char *maddr)
 {
-    // Æ´½ÓÖ¸Áî
+    // æ‹¼æ¥æŒ‡ä»¤
     char cmd[20];
     sprintf(cmd, "AT+MADDR%s\r\n", maddr);
-    // Ğ´ÈëÖ¸Áî
+    // å†™å…¥æŒ‡ä»¤
     write(device->fd, cmd, strlen(cmd));
-    // µÈ´ıACK
+    // ç­‰å¾…ACK
     return wait_ack(device->fd);
 }

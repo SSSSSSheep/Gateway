@@ -1,5 +1,5 @@
 #include "app_pool.h"
-#include "thirdparty/log/log.h"
+#include "log/log.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <mqueue.h>
@@ -147,7 +147,7 @@ static void update_backpressure_stats(job_type_t type, const char *action)
     pthread_mutex_unlock(&stats_mutex);
 }
 
-static char *generrate_mq_name(void)
+static char *generate_mq_name(void)
 {
     static char name[64];
     pid_t pid = getpid();
@@ -212,7 +212,7 @@ void *task_fun(void *arg)
 int app_pool_init(int size)
 {
     // 生成随机队列名称
-    mq_name = generrate_mq_name();
+    mq_name = generate_mq_name();
 
     // 初始化并创建消息队列
     struct mq_attr mq_attr;
