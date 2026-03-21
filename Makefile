@@ -122,6 +122,12 @@ test_mqtt_reliability: test/test_mqtt_reliability.c $(app_bt) $(app_common) $(lo
 	-./$@
 	-rm $@
 
+test_mqtt_recv: test/test_mqtt_recv.c $(app_mqtt) $(log)
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpaho-mqtt3c
+	-./$@
+	-rm $@
+
+
 #	-rm $@
 # $^: ?????��?
 # $@: ??????
