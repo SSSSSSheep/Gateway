@@ -38,6 +38,11 @@ static int write_thread_handler(const uint8_t *data, uint32_t len)
     if (device->pre_write)
     {
         data_len = device->pre_write(data_buf, data_len);
+        if (data_len < 0)
+        {
+            log_error("pre_write returned negative length: %d", data_len);
+            return -1;
+        }
     }
 
     // 写文件前，检查写时间间隔
@@ -55,10 +60,19 @@ static int write_thread_handler(const uint8_t *data, uint32_t len)
     // 添加跟踪
     if (data_len > 0 && strncmp(data_buf, "AT+MESH", 7) == 0)
     {
-        app_bt_add_tracker(device, data_buf, data_len);
+        int ret = app_bt_add_tracker(device, data_buf, data_len);
+        if (ret != 0)
+        {
+            log_warn("Failed to add tracker for AT+MESH command");
+        }
     }
 
     // 将字节数组写入设备文件
+    if (data_len < 0)
+    {
+        log_error("data_len < 0");
+        return -1;
+    }
     ssize_t write_len = write(device->fd, data_buf, data_len);
     if (write_len != data_len)
     {
@@ -81,8 +95,18 @@ static int send_message_handler(const uint8_t *data, uint32_t len)
     // 从上行缓冲区读取一个字符数组message数据
     char data_buf[128];
     int data_len = app_buffer_read(device->up_buffer, data_buf, sizeof(data_buf));
+    if (data_len < 0)
+    {
+        log_error("buffer_read returned negative length: %d", data_len);
+        return -1;
+    }
     // 字符数组message转换为json
     char *json = app_message_chars2Json(data_buf, data_len);
+    if (!json)
+    {
+        log_error("chars2Json returned NULL");
+        return -1;
+    }
     // 将json数据发送给远程
     int res = app_mqtt_send(json);
     if (res == -1)
@@ -107,11 +131,21 @@ static void *read_thread_fun(void *arg)
         {
             if (data_len == 0)
             {
-                log_debug("read returen 0, device closed");
+                log_error("read returen 0, device closed");
+                usleep(100000);
             }
             else
             {
-                log_debug("read error:%s", strerror(errno));
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    // 非阻塞模式下没有数据，这是正常的
+                    usleep(10000); // 10ms 延迟
+                }
+                else
+                {
+                    log_error("read error:%s", strerror(errno));
+                    usleep(100000);
+                }
             }
             continue;
         }
@@ -120,16 +154,31 @@ static void *read_thread_fun(void *arg)
         if (data_len > 0 && device->post_read)
         {
             data_len = device->post_read(data_buf, data_len);
+            if (data_len < 0)
+            {
+                log_error("post_read returned negative length: %d", data_len);
+                continue;
+            }
         }
 
         if (data_len > 0)
         {
             // 将Message写入上行缓冲区
-            app_buffer_write(device->up_buffer, data_buf, data_len);
+            int ret = app_buffer_write(device->up_buffer, data_buf, data_len);
+            if (ret != 0)
+            {
+                log_error("Failed to write to up buffer: %d");
+                continue;
+            }
             // 将上行缓冲区中的数据发送给远程
-            app_pool_add_task(JOB_TYPE_MQTT_PUBLISH, (const uint8_t *)data_buf, data_len);
+            int ret = app_pool_add_task(JOB_TYPE_MQTT_PUBLISH, (const uint8_t *)data_buf, data_len);
+            if (ret != 0)
+            {
+                log_error("Failed to add task to pool: %d", ret);
+                return -1;
+            }
         }
-        
+
         // 定期检查超时的数据包并进行重试
         app_bt_check_and_retry(device);
     }
@@ -142,6 +191,11 @@ static int recv_msg_callback(char *json)
     // json消息转换为字符数组Message
     char data_buf[128];
     int data_len = app_message_json2Chars(json, data_buf, sizeof(data_buf));
+    if (data_len <= 0)
+    {
+        log_error("json2Chars returned invalid length: %d", data_len);
+        return -1;
+    }
     // 将Message写入下行缓冲区
     app_buffer_write(device->down_buffer, data_buf, data_len);
     // 将写设备文件的任务交给线程池，线程池会调度某个线程来执行

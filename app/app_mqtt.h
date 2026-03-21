@@ -36,4 +36,11 @@ int app_mqtt_send(char *json);
  * @param callback 回调函数，参数为接收到的JSON字符串，返回值为处理结果
  */
 void app_mqtt_registerRecvCallback(int (*callback)(char *json));
+
+/**
+ * @brief 检查未确认的消息
+ * 如果存在未确认的消息，则尝试重新发送
+ *
+ */
+void app_mqtt_check_unconfirmed_messages(void);
 #endif // !APP_MQTT_H__

@@ -18,7 +18,7 @@
 // 重试超时时间（毫秒）
 #define RETRY_TIMEOUT_MS 1000
 
-// 蓝牙数据包ID
+// 状态机
 typedef enum
 {
     FSM_STATE_IDLE = 0,    // 空闲状态
@@ -28,7 +28,7 @@ typedef enum
     FSM_STATE_ERROR,       // 错误状态
 } fsm_state_t;
 
-// 蓝牙数据包结构体
+// 追踪器结构体
 typedef struct
 {
     uint16_t packet_id;        // 包ID

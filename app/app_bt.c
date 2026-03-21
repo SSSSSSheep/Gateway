@@ -37,7 +37,7 @@ static uint16_t temp_id = 0;
 
 /**
  * @brief 重置蓝牙模块的内部状态
- * 
+ *
  * 这个函数用于重置接收缓冲区、FSM状态和ACK跟踪器等内部状态。
  * 主要用于测试场景，或者在通信出现严重错误时重置状态。
  */
@@ -145,7 +145,8 @@ static int check_and_retry(void)
 int app_bt_check_and_retry(Device *device)
 {
     // 更新全局设备指针
-    if (device != NULL) {
+    if (device != NULL)
+    {
         g_bt_device = device;
     }
     return check_and_retry();
@@ -321,8 +322,13 @@ int app_bt_postRead(char *data, int data_len)
     // data_len 参数的含义：
     // - 输入时：表示输入数据的长度
     // - 输出时：表示输出缓冲区的大小
+    if (data_len < 0)
+    {
+        log_error("data_len is invalid: %d", data_len);
+        return -1;
+    }
 
-    log_debug("app_bt_postRead called: data_len=%d, read_len=%d, current_state=%d", 
+    log_debug("app_bt_postRead called: data_len=%d, read_len=%d, current_state=%d",
               data_len, read_len, current_state);
 
     // 检查缓冲区是否超过上限
@@ -336,7 +342,7 @@ int app_bt_postRead(char *data, int data_len)
 
     if (read_len + data_len > MAX_RECV_BUFFER_SIZE)
     {
-        log_error("Receive buffer overflow, read_len=%d, data_len=%d, max=%d", 
+        log_error("Receive buffer overflow, read_len=%d, data_len=%d, max=%d",
                   read_len, data_len, MAX_RECV_BUFFER_SIZE);
         // 清空读缓冲区和重置状态
         read_len = 0;
@@ -355,18 +361,20 @@ int app_bt_postRead(char *data, int data_len)
     log_debug("Added data to buffer: new read_len=%d", read_len);
 
     // 打印缓冲区的前16个字节，用于调试
-    if (read_len > 0) {
+    if (read_len > 0)
+    {
         char hex_str[64];
         int hex_len = read_len < 16 ? read_len : 16;
-        for (int i = 0; i < hex_len; i++) {
-            sprintf(hex_str + i*3, "%02x ", (unsigned char)read_buf[i]);
+        for (int i = 0; i < hex_len; i++)
+        {
+            sprintf(hex_str + i * 3, "%02x ", (unsigned char)read_buf[i]);
         }
         log_debug("Buffer content (first %d bytes): %s", hex_len, hex_str);
     }
 
     // 使用 FSM 解析数据
     int processed = 0;
-    log_debug("Starting FSM parsing: processed=%d, read_len=%d, state=%d", 
+    log_debug("Starting FSM parsing: processed=%d, read_len=%d, state=%d",
               processed, read_len, current_state);
     while (processed < read_len)
     {
@@ -376,14 +384,14 @@ int app_bt_postRead(char *data, int data_len)
             // 等待固定头部 0xf1 0xdd
             unsigned char current_byte = (unsigned char)read_buf[processed];
             unsigned char next_byte = (processed + 1 < read_len) ? (unsigned char)read_buf[processed + 1] : 0;
-            log_debug("FSM IDLE: processed=%d, read_len=%d, byte=0x%02x, next_byte=0x%02x", 
+            log_debug("FSM IDLE: processed=%d, read_len=%d, byte=0x%02x, next_byte=0x%02x",
                       processed, read_len, current_byte, next_byte);
 
             // 检查条件
             int cond1 = (current_byte == 0xf1);
             int cond2 = (processed + 1 < read_len);
             int cond3 = (next_byte == 0xdd);
-            log_debug("FSM IDLE conditions: cond1=%d (0x%02x==0xf1), cond2=%d (%d<%d), cond3=%d (0x%02x==0xdd)", 
+            log_debug("FSM IDLE conditions: cond1=%d (0x%02x==0xf1), cond2=%d (%d<%d), cond3=%d (0x%02x==0xdd)",
                       cond1, current_byte, cond2, processed + 1, read_len, cond3, next_byte);
 
             if (cond1 && cond2 && cond3)
@@ -426,7 +434,7 @@ int app_bt_postRead(char *data, int data_len)
             // 检查是否有足够的数据
             if (parse_pos + temp_len <= read_len)
             {
-                log_debug("Have enough data: parse_pos=%d, temp_len=%d, read_len=%d", 
+                log_debug("Have enough data: parse_pos=%d, temp_len=%d, read_len=%d",
                           parse_pos, temp_len, read_len);
                 // 读取ID
                 if (temp_len >= 2)
@@ -467,7 +475,7 @@ int app_bt_postRead(char *data, int data_len)
             }
             else
             {
-                log_debug("Waiting for more data: parse_pos=%d, temp_len=%d, read_len=%d", 
+                log_debug("Waiting for more data: parse_pos=%d, temp_len=%d, read_len=%d",
                           parse_pos, temp_len, read_len);
                 processed = read_len; // 等待更多数据
             }
