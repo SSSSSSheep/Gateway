@@ -9,6 +9,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <inttypes.h>
 
 // 线程数量
 static int thread_num;
@@ -20,6 +21,9 @@ static mqd_t mq_fd;
 
 // 消息队列名称（动态生成）
 static char *mq_name = NULL;
+
+// 退出哨兵标志
+static volatile int pool_should_exit = 0;
 
 // 任务处理器注册表
 static job_handler_t job_handlers[JOB_TYPE_MAX] = {NULL};
@@ -153,9 +157,14 @@ static char *generate_mq_name(void)
     pid_t pid = getpid();
     unsigned int rand_val;
 
-    // 使用时间作为随机数种子
-    srand(time(NULL));
-    rand_val = rand() % 10000;
+    // 使用更可靠的随机数生成方式
+    // 组合PID、时间和线程地址作为随机源
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    rand_val = (unsigned int)(pid ^ ts.tv_nsec ^ (unsigned long)&ts);
+
+    // 确保随机值在合理范围内
+    rand_val = rand_val % 10000;
 
     snprintf(name, sizeof(name), "/mq_%d_%u", pid, rand_val);
     return name;
@@ -179,10 +188,17 @@ int app_pool_register_handler(job_type_t type, job_handler_t handler)
 void *task_fun(void *arg)
 {
     Task task;
-    while (1)
+    while (!pool_should_exit)
     {
         // 从消息队列中获取任务
         int len = mq_receive(mq_fd, (char *)&task, sizeof(Task), NULL);
+
+        // 检查是否收到退出信号
+        if (pool_should_exit)
+        {
+            break;
+        }
+
         // 执行任务
         if (len == sizeof(Task))
         {
@@ -198,15 +214,24 @@ void *task_fun(void *arg)
                     log_error("no handler for job type: %d", task.type);
                 }
 
-                // 处理完任务后，尝试发送合并后的任务
-                app_pool_try_send_merged_task(task.type);
+                // 处理完任务后，尝试发送所有类型的合并任务
+                for (job_type_t type = JOB_TYPE_INVALID + 1; type < JOB_TYPE_MAX; type++)
+                {
+                    app_pool_try_send_merged_task(type);
+                }
             }
             else
             {
                 log_error("invalid job type: %d", task.type);
             }
         }
+        else if (len == -1 && errno == EINTR)
+        {
+            // 被信号中断，继续循环检查退出标志
+            continue;
+        }
     }
+    return NULL;
 }
 
 int app_pool_init(int size)
@@ -218,6 +243,10 @@ int app_pool_init(int size)
     struct mq_attr mq_attr;
     mq_attr.mq_maxmsg = 10;            // 消息队列中最多消息数
     mq_attr.mq_msgsize = sizeof(Task); // 每条消息最大字节数
+
+    // crash恢复策略：先尝试删除可能存在的旧消息队列
+    // 忽略错误，因为队列可能不存在
+    mq_unlink(mq_name);
 
     // 修改权限为0600，即只有创建者可以读写
     mq_fd = mq_open(mq_name, O_CREAT | O_RDWR, 0600, &mq_attr);
@@ -266,17 +295,40 @@ int app_pool_init(int size)
 
 void app_pool_destroy()
 {
-    // 关闭并删除消息队列
-    mq_close(mq_fd);
-    mq_unlink(mq_name);
+    // 设置退出哨兵标志，通知所有线程退出
+    pool_should_exit = 1;
+
+    // 向消息队列发送退出任务，唤醒可能阻塞在mq_receive的线程
+    // 循环尝试，直到成功或队列被清空
+    Task exit_task;
+    exit_task.type = JOB_TYPE_INVALID;
+    exit_task.data_len = 0;
+
+    while (mq_send(mq_fd, (char *)&exit_task, sizeof(Task), 0) == -1 && errno == EAGAIN)
+    {
+        // 从队列中取出一个任务丢弃，腾出空间
+        Task dummy;
+        if (mq_receive(mq_fd, (char *)&dummy, sizeof(Task), NULL) > 0)
+        {
+            log_warn("Dropping one task to make room for exit signal");
+        }
+        else
+        {
+            log_error("Failed to receive task from queue during destroy");
+            break;
+        }
+    }
 
     // 销毁线程池
     for (int i = 0; i < thread_num; i++)
     {
-        pthread_cancel(thread_pool[i]);
         pthread_join(thread_pool[i], NULL);
     }
     free(thread_pool);
+
+    // 关闭并删除消息队列
+    mq_close(mq_fd);
+    mq_unlink(mq_name);
 
     log_debug("app pool destroy success");
 }
@@ -448,17 +500,17 @@ int app_pool_report_backpressure_stats(void)
 
     log_info("=====================================");
     log_info("Backpressure Statistics:");
-    log_info("Total tasks: %lu", bp_stats.total_tasks);
-    log_info("Dropped tasks: %lu (%.2f%%)", bp_stats.dropped_tasks,
+    log_info("Total tasks: %" PRIu64, bp_stats.total_tasks);
+    log_info("Dropped tasks: %" PRIu64 " (%.2f%%)", bp_stats.dropped_tasks,
              bp_stats.total_tasks > 0 ? (double)bp_stats.dropped_tasks * 100.0 / bp_stats.total_tasks : 0.0);
-    log_info("Merged tasks: %lu (%.2f%%)", bp_stats.merged_tasks,
+    log_info("Merged tasks: %" PRIu64 " (%.2f%%)", bp_stats.merged_tasks,
              bp_stats.total_tasks > 0 ? (double)bp_stats.merged_tasks * 100.0 / bp_stats.total_tasks : 0.0);
-    log_info("Merge count: %lu (times merged)", bp_stats.merge_count);
-    log_info("Downsampled tasks: %lu (%.2f%%)", bp_stats.downsampled_tasks,
+    log_info("Merge count: %" PRIu64 " (times merged)", bp_stats.merge_count);
+    log_info("Downsampled tasks: %" PRIu64 " (%.2f%%)", bp_stats.downsampled_tasks,
              bp_stats.total_tasks > 0 ? (double)bp_stats.downsampled_tasks * 100.0 / bp_stats.total_tasks : 0.0);
-    log_info("Outbox tasks: %lu (%.2f%%)", bp_stats.outbox_tasks,
+    log_info("Outbox tasks: %" PRIu64 " (%.2f%%)", bp_stats.outbox_tasks,
              bp_stats.total_tasks > 0 ? (double)bp_stats.outbox_tasks * 100.0 / bp_stats.total_tasks : 0.0);
-    log_info("EAGAIN count: %lu", bp_stats.eagain_count);
+    log_info("EAGAIN count: %" PRIu64, bp_stats.eagain_count);
     log_info("=====================================");
 
     pthread_mutex_unlock(&stats_mutex);

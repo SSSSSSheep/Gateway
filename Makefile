@@ -127,6 +127,11 @@ test_mqtt_recv: test/test_mqtt_recv.c $(app_mqtt) $(log)
 	-./$@
 	-rm $@
 
+app_pool_test_enhanced: test/app_pool_test_enhanced.c $(app_pool) $(log)
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpthread -lrt
+	-./$@
+	-rm $@
+
 
 #	-rm $@
 # $^: ?????��?

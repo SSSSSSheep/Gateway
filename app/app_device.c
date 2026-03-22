@@ -251,14 +251,17 @@ int app_device_start()
 
 int app_device_close()
 {
+    // 设置退出标志，通知读取线程退出
+    device->is_running = 0;
+
+    // 等待读取线程退出
+    pthread_join(device->read_thread, NULL);
+
     // 关闭文件
     close(device->fd);
     // 释放buffer
     app_buffer_free(device->up_buffer);
     app_buffer_free(device->down_buffer);
-    // 取消线程
-    pthread_cancel(device->read_thread);
-    pthread_join(device->read_thread, NULL);
     // 释放Device
     free(device);
     // 关闭线程池
