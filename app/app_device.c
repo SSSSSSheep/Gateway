@@ -24,6 +24,13 @@ static int write_thread_handler(const uint8_t *data, uint32_t len)
     char data_buf[128];
     int data_len = app_buffer_read(device->down_buffer, data_buf, sizeof(data_buf));
 
+    // 检测是否读取到数据
+    if (data_len <= 0)
+    {
+        log_error("buffer_read buffer empty length: %d", data_len);
+        return 0;
+    }
+
     // 判断消息类型（这里需要根据实际业务逻辑判断）
     msg_type_t msg_type = MSG_TYPE_DATA; // 默认为数据转发
 

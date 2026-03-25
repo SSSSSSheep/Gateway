@@ -1,14 +1,22 @@
 #ifndef __OTA_HTTP_H__
 #define __OTA_HTTP_H__
 
-// °æÖ÷ĞÅÏ¢µØÖ·
+// ç‰ˆä¸»ä¿¡æ¯åœ°å€
 #define OTA_URL_FILEINFO "http://192.168.1.4:8000/fileinfo.json"
-// ÏÂÔØµØÖ·
+// ä¸‹è½½åœ°å€
 #define OTA_URL_DOWNLOAD "http://192.168.1.4:8000/download/gateway"
 // #define OTA_LOCAL_FILE_PATH "/home/admin123/gateway.update"
 #define OTA_LOCAL_FILE_PATH "/root/gateway.update"
+
+typedef struct
+{
+    char *buf;
+    size_t size;
+    size_t used;
+} http_buffer_t;
+
 /**
- * @brief ÇëÇóÖ¸¶¨url»ñÈ¡jsonÊı¾İ
+ * @brief è¯·æ±‚æŒ‡å®šurlè·å–jsonæ•°æ®
  *
  * @param url
  * @return char*
@@ -16,7 +24,7 @@
 char *ota_http_getJson(char *url);
 
 /**
- * @brief ÏÂÔØÖ¸¶¨urlÎÄ¼şµ½Ö¸¶¨Â·¾¶
+ * @brief ä¸‹è½½æŒ‡å®šurlæ–‡ä»¶åˆ°æŒ‡å®šè·¯å¾„
  *
  * @param url
  * @param filename

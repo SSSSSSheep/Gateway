@@ -75,17 +75,51 @@ int ota_version_checkUpdate()
 {
     // 获取远程版本信息的json
     char *json = ota_http_getJson(OTA_URL_FILEINFO);
+    if (!json)
+    {
+        log_debug("get json failed");
+        return -1;
+    }
     // 解析json得到版本号+固件hash值
     cJSON *root = cJSON_Parse(json);
-    int major = cJSON_GetObjectItem(root, "major")->valueint;
-    int minor = cJSON_GetObjectItem(root, "minor")->valueint;
-    int patch = cJSON_GetObjectItem(root, "patch")->valueint;
+    if (!root)
+    {
+        log_debug("parse json failed");
+        free(json);
+        return -1;
+    }
+
+    cJSON *major_item = cJSON_GetObjectItem(root, "major");
+    cJSON *minor_item = cJSON_GetObjectItem(root, "minor");
+    cJSON *patch_item = cJSON_GetObjectItem(root, "patch");
+    cJSON *sha1_item = cJSON_GetObjectItem(root, "sha1");
+
+    if (!major_item || !cJSON_IsNumber(major_item) || !minor_item || !cJSON_IsNumber(minor_item) || !patch_item || !cJSON_IsNumber(patch_item) || !sha1_item || !cJSON_IsString(sha1_item))
+    {
+        log_debug("Invalid version fields in JSON");
+        free(json);
+        cJSON_Delete(root);
+        return -1;
+    }
+    if (!sha1_item || !cJSON_IsString(sha1_item))
+    {
+        log_debug("Invalid sha1 field in JSON");
+        free(json);
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    int major = major_item->valueint;
+    int minor = minor_item->valueint;
+    int patch = patch_item->valueint;
     log_debug("online version: %d.%d.%d", major, minor, patch);
     log_debug("current version: %d.%d.%d", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
     // 比较本地版本号和远程版本号，如果本地版本号不小于远程，则不需要更新，直接结束
     if (major < VERSION_MAJOR || (major == VERSION_MAJOR && minor < VERSION_MINOR) || (minor == VERSION_MINOR && patch <= VERSION_PATCH))
     {
         log_debug("current version is latset, no need to update");
+        free(json);
+        cJSON_Delete(root);
         return 0;
     }
     // 如果本地版本号小于远程，则下载固件
@@ -93,24 +127,38 @@ int ota_version_checkUpdate()
     if (res != 0)
     {
         log_debug("download file failed");
+        free(json);
+        cJSON_Delete(root);
         return -1;
     }
     // 下载成功，则开始校验固件hash值（下载的和json解析出的）
     char *remote_sha = cJSON_GetObjectItem(root, "sha1")->valuestring;
     char *local_sha = get_file_sha(OTA_LOCAL_FILE_PATH);
+    if (!local_sha)
+    {
+        log_debug("get file sha failed");
+        unlink(OTA_LOCAL_FILE_PATH);
+        free(json);
+        cJSON_Delete(root);
+        return -1;
+    }
 
     // 如果校验失败，删除下载的文件，则失败结束
     if (strcmp(remote_sha, local_sha) != 0)
     {
         log_debug("sha1 check failed");
         unlink(OTA_LOCAL_FILE_PATH);
-        free(remote_sha);
         free(local_sha);
         cJSON_Delete(root);
+        free(json);
         return -1;
     }
+
     // 如果校验成功，重启系统，运行新固件
     log_debug("sha1 check success, rebooting...");
+    free(local_sha);
+    cJSON_Delete(root);
+    free(json);
     reboot(RB_AUTOBOOT); // 重启系统 =》 需要当前是root
     return 0;
 }
@@ -119,9 +167,17 @@ int ota_version_checkUpdateDaily()
 {
     while (1)
     {
-        ota_version_checkUpdate();
-        log_debug("sleeping 24 hours...");
-        sleep(24 * 60 * 60);
+        int ret = ota_version_checkUpdate();
+        if (ret != 0)
+        {
+            log_debug("Update check failed,retry after 1 hours");
+            sleep(1 * 60 * 60);
+        }
+        else
+        {
+            log_debug("Update check success, sleep 24 hours");
+            sleep(24 * 60 * 60);
+        }
     }
     return 0;
 }
