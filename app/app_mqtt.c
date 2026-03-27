@@ -282,6 +282,9 @@ void app_mqtt_close(void)
     unconfirmed_count = 0;
     pthread_mutex_unlock(&mqtt_mutex);
 
+    // 先取消订阅，避免断开连接时出现错误
+    MQTTClient_unsubscribe(client, TOPIC_R2G);
+
     MQTTClient_disconnect(client, TIMEOUT);
     MQTTClient_destroy(&client);
 }

@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <time.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "app_bt.h"
 #include "app_serial.h"
 #include "log/log.h"
@@ -70,6 +72,11 @@ void *ack_receiver_thread(void *arg)
     Device *device = (Device *)arg;
     char buf[256];
     int len;
+    int flags;
+
+    // 保存原始标志并设置为非阻塞模式
+    flags = fcntl(device->fd, F_GETFL, 0);
+    fcntl(device->fd, F_SETFL, flags | O_NONBLOCK);
 
     while (test_running)
     {
@@ -85,8 +92,16 @@ void *ack_receiver_thread(void *arg)
                 log_info("Received ACK");
             }
         }
+        else if (len < 0 && errno != EAGAIN)
+        {
+            log_error("Read error: %s", strerror(errno));
+            break;
+        }
         usleep(10000); // 10ms
     }
+
+    // 恢复为阻塞模式
+    fcntl(device->fd, F_SETFL, flags);
 
     return NULL;
 }

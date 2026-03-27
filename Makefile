@@ -132,6 +132,12 @@ app_pool_test_enhanced: test/app_pool_test_enhanced.c $(app_pool) $(log)
 	-./$@
 	-rm $@
 
+test_upstream: test/test_upstream.c $(app_bt) $(app_common) $(log) $(json) $(app_serial) $(app_message) $(app_pool) $(app_mqtt) $(app_device) $(app_buffer)
+	-$(CC) $^ -o $@ -Iapp -Ithirdparty -lpaho-mqtt3c -lpthread -lrt
+	-./$@
+	-rm $@
+
+
 
 #	-rm $@
 # $^: ?????��?

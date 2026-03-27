@@ -304,20 +304,29 @@ void app_pool_destroy()
     exit_task.type = JOB_TYPE_INVALID;
     exit_task.data_len = 0;
 
-    while (mq_send(mq_fd, (char *)&exit_task, sizeof(Task), 0) == -1 && errno == EAGAIN)
+    // 尝试发送退出任务
+    int ret = mq_send(mq_fd, (char *)&exit_task, sizeof(Task), 0);
+    if (ret == -1 && errno == EAGAIN)
     {
-        // 从队列中取出一个任务丢弃，腾出空间
+        // 队列满，尝试清空队列
         Task dummy;
-        if (mq_receive(mq_fd, (char *)&dummy, sizeof(Task), NULL) > 0)
+        while (mq_receive(mq_fd, (char *)&dummy, sizeof(Task), NULL) > 0)
         {
-            log_warn("Dropping one task to make room for exit signal");
+            log_warn("Dropping task to make room for exit signal");
         }
-        else
+        // 再次尝试发送退出任务
+        ret = mq_send(mq_fd, (char *)&exit_task, sizeof(Task), 0);
+        if (ret == -1)
         {
-            log_error("Failed to receive task from queue during destroy");
-            break;
+            log_error("Failed to send exit task: %s", strerror(errno));
         }
     }
+
+    // 先删除消息队列，这会中断所有阻塞在mq_receive上的线程
+    mq_unlink(mq_name);
+
+    // 关闭消息队列
+    mq_close(mq_fd);
 
     // 销毁线程池
     for (int i = 0; i < thread_num; i++)
@@ -325,10 +334,6 @@ void app_pool_destroy()
         pthread_join(thread_pool[i], NULL);
     }
     free(thread_pool);
-
-    // 关闭并删除消息队列
-    mq_close(mq_fd);
-    mq_unlink(mq_name);
 
     log_debug("app pool destroy success");
 }

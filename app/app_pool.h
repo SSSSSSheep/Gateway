@@ -11,17 +11,18 @@ typedef enum
     JOB_TYPE_BT_CONNECT,   // 蓝牙连接任务
     JOB_TYPE_MQTT_PUBLISH, // MQTT发布任务
     JOB_TYPE_SERIAL_SEND,  // 串口发送任务
+    JOB_TYPE_SERIAL_RECV,  // 串口接收任务
     JOB_TYPE_MAX           // 用于边界检查
 } job_type_t;
 
 // 回压策略枚举
 typedef enum
 {
-    BACKPRESSURE_DROP = 0,       // 丢弃策略：队列满时直接丢弃新任务
-    BACKPRESSURE_MERGE,          // 合并策略：队列满时合并相同类型的任务
-    BACKPRESSURE_DOWNSAMPLE,     // 降采样策略：队列满时按时间间隔降采样
-    BACKPRESSURE_OUTBOX,         // 本地存储策略：队列满时写入本地文件
-    BACKPRESSURE_MAX             // 用于边界检查
+    BACKPRESSURE_DROP = 0,   // 丢弃策略：队列满时直接丢弃新任务
+    BACKPRESSURE_MERGE,      // 合并策略：队列满时合并相同类型的任务
+    BACKPRESSURE_DOWNSAMPLE, // 降采样策略：队列满时按时间间隔降采样
+    BACKPRESSURE_OUTBOX,     // 本地存储策略：队列满时写入本地文件
+    BACKPRESSURE_MAX         // 用于边界检查
 } backpressure_strategy_t;
 
 // 任务数据结构（使用数据副本而非指针）

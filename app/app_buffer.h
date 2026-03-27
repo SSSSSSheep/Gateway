@@ -3,57 +3,57 @@
 
 #include <pthread.h>
 
-// ÄÚ²¿µÄ×Ó»º³åÇø
+// ï¿½Ú²ï¿½ï¿½ï¿½ï¿½Ó»ï¿½ï¿½ï¿½ï¿½ï¿½
 typedef struct
 {
-    unsigned char *ptr; // Ö¸Ïò»º³åÇøµÄÖ¸Õë
-    int total_size;     // »º³åÇøµÄ´óÐ¡
-    int len;            // »º³åÇøµÄÊý¾Ý³¤¶È
+    unsigned char *ptr; // Ö¸ï¿½ò»º³ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½
+    int total_size;     // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä´ï¿½Ð¡
+    int len;            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý³ï¿½ï¿½ï¿½
 } SubBuffer;
 
-// »º³åÇø
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 typedef struct
 {
-    SubBuffer *sub_buffers[2];  // Á½¸ö×Ó»º³åÇø
-    int read_index;             // µ±Ç°¶ÁÈ¡µÄ×Ó»º³åÇøË÷Òý
-    int write_index;            // µ±Ç°Ð´ÈëµÄ×Ó»º³åÇøË÷Òý
-    pthread_mutex_t read_lock;  // ¶ÁËø
-    pthread_mutex_t write_lock; // Ð´Ëø
+    SubBuffer *sub_buffers[2];  // ï¿½ï¿½ï¿½ï¿½ï¿½Ó»ï¿½ï¿½ï¿½ï¿½ï¿½
+    int read_index;             // ï¿½ï¿½Ç°ï¿½ï¿½È¡ï¿½ï¿½ï¿½Ó»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    int write_index;            // ï¿½ï¿½Ç°Ð´ï¿½ï¿½ï¿½ï¿½Ó»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    pthread_mutex_t read_lock;  // ï¿½ï¿½ï¿½ï¿½
+    pthread_mutex_t write_lock; // Ð´ï¿½ï¿½
 } Buffer;
 
 /**
- * @brief ³õÊ¼»¯»º³åÇø
+ * @brief ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
  *
  * @param size
  * @return Buffer*
  */
-Buffer *app_buffer_init(int size); // ´´½¨»º³åÇø
+Buffer *app_buffer_init(int size); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
 /**
- * @brief Çå¿Õ»º³åÇø
+ * @brief ï¿½ï¿½Õ»ï¿½ï¿½ï¿½ï¿½ï¿½
  *
  * @param buffer
  */
-void app_buffer_free(Buffer *buffer); // ÊÍ·Å»º³åÇø
+void app_buffer_free(Buffer *buffer); // ï¿½Í·Å»ï¿½ï¿½ï¿½ï¿½ï¿½
 
 /**
- * @brief Ð´ÈëÊý¾Ýµ½»º³åÇø
- *
- * @param buffer
- * @param data
- * @param len
- * @return int
- */
-int app_buffer_write(Buffer *buffer, char *data, int data_len); // Ð´ÈëÊý¾Ý
-
-/**
- * @brief ´Ó»º³åÇø¶ÁÈ¡Êý¾Ý
+ * @brief Ð´ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
  *
  * @param buffer
  * @param data
  * @param len
  * @return int
  */
-int app_buffer_read(Buffer *buffer, char *data_buf, int buf_size); // ¶ÁÈ¡Êý¾Ý
+int app_buffer_write(Buffer *buffer, char *data, int data_len); // Ð´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+
+/**
+ * @brief ï¿½Ó»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½
+ *
+ * @param buffer
+ * @param data
+ * @param len
+ * @return int
+ */
+int app_buffer_read(Buffer *buffer, char *data_buf, int buf_size); // ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½
 
 #endif // !__APP_BUFFER_H__

@@ -221,27 +221,49 @@ static int init_bluetooth(Device *device)
     app_serial_setBlockMode(device, 0);
     app_serial_flush(device);
 
-    // 串口的波特率当前是9600
-    // 如果当前蓝牙可用，说明当前的波特率为9600
-    if (app_bt_status(device) == 0)
-    {
-        // 将蓝牙的波特率设置为115200
-        app_bt_setBaudRate(device, BT_BR_115200);
-        // 重启蓝牙设备
-        app_bt_reset(device);
-        // 等待蓝牙设备重启完成
-        sleep(2);
-    }
-    // 将串口的波特率设置为115200
+    // 首先尝试用115200波特率连接
     app_serial_setBaudRate(device, BR_115200);
     app_serial_flush(device);
 
-    // 判断蓝牙是否可用 如果不可用 返回-1
+    // 检查蓝牙是否可用（115200波特率）
+    if (app_bt_status(device) == 0)
+    {
+        log_debug("Bluetooth already at 115200 baud rate");
+    }
+    else
+    {
+        // 如果115200不可用，尝试用9600波特率
+        app_serial_setBaudRate(device, BR_9600);
+        app_serial_flush(device);
+
+        // 检查蓝牙是否可用（9600波特率）
+        if (app_bt_status(device) == 0)
+        {
+            log_debug("Bluetooth at 9600 baud rate, switching to 115200");
+            // 将蓝牙的波特率设置为115200
+            app_bt_setBaudRate(device, BT_BR_115200);
+            // 重启蓝牙设备
+            app_bt_reset(device);
+            // 等待蓝牙设备重启完成
+            sleep(2);
+            // 将串口的波特率设置为115200
+            app_serial_setBaudRate(device, BR_115200);
+            app_serial_flush(device);
+        }
+        else
+        {
+            log_error("bluetooth is not available at either 9600 or 115200 baud rate");
+            return -1;
+        }
+    }
+
+    // 再次检查蓝牙是否可用
     if (app_bt_status(device) != 0)
     {
         log_error("bluetooth is not available");
         return -1;
     }
+
     // 设置组网ID: 组内相同 组间不同
     app_bt_setNetId(device, "1111");
     // 设置MAC地址: 组内不同 组间可以相同
@@ -283,10 +305,11 @@ int app_bt_preWrite(char *data, int data_len)
     if (blue_len > MAXX_BLUE_DATA_LEN)
     {
         log_error("blue_len is too large: %d", blue_len);
+        return -1;
     }
 
     // 创建蓝牙数据数组
-    char blue_data[blue_len];
+    char blue_data[MAXX_BLUE_DATA_LEN];
 
     // 根据data中的数据组装蓝牙数据
     // data: 1 2 3 XX abc

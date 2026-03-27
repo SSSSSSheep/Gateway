@@ -1,6 +1,9 @@
 #ifndef APP_MQTT_H__
 #define APP_MQTT_H__
 
+#include <MQTTClient.h>
+#include <time.h>
+
 // #define ADDRESS "ws://192.168.1.4:8083"
 #define ADDRESS "tcp://192.168.1.4:1883"
 #define CLIENTID "b253ba38-daf6-4b37-984f-5d8fdc6a1cfa"
