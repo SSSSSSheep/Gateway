@@ -5,6 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/select.h>
+#include <errno.h>
 
 static Device *g_bt_device = NULL;
 
@@ -15,11 +17,6 @@ static uint64_t get_current_time_ms(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
-
-// 蓝牙数据接收回调函数
-static ack_tracker_t ack_trackers[MAX_PENDING_ACKS];
-// 蓝牙数据接收回调函数的索引
-static uint8_t next_tracker_index = 0;
 
 // 接收缓冲区
 static char read_buf[1024];
@@ -53,163 +50,7 @@ void app_bt_reset_internal_state(void)
     temp_len = 0;
     temp_id = 0;
 
-    // 重置ACK跟踪器
-    memset(ack_trackers, 0, sizeof(ack_trackers));
-    next_tracker_index = 0;
-
     log_debug("Bluetooth internal state reset");
-}
-
-// 在处理ACK的函数中添加校验逻辑
-// 前向声明
-static void trigger_resync(Device *device);
-
-int app_bt_add_tracker(Device *device, const char *data, int data_len)
-{
-    // 找到可用的跟踪器
-    int tracker_index = -1;
-    for (int i = 0; i < MAX_PENDING_ACKS; i++)
-    {
-        if (ack_trackers[i].ack_received || ack_trackers[i].packet_id == 0)
-        {
-            tracker_index = i;
-            break;
-        }
-    }
-
-    if (tracker_index == -1)
-    {
-        log_error("No available tracker slot");
-        return -1;
-    }
-
-    // 读取包ID
-    uint16_t packet_id;
-    memcpy(&packet_id, data + 8, 2);
-
-    // 初始化跟踪器
-    ack_trackers[tracker_index].packet_id = packet_id;
-    ack_trackers[tracker_index].retry_count = 0;
-    ack_trackers[tracker_index].ack_received = 0;
-    ack_trackers[tracker_index].data_len = data_len;
-    memcpy(ack_trackers[tracker_index].data, data, data_len);
-    clock_gettime(CLOCK_MONOTONIC, &ack_trackers[tracker_index].send_time);
-
-    return 0;
-}
-
-static int check_and_retry(void)
-{
-    uint64_t current_time = get_current_time_ms();
-
-    for (int i = 0; i < MAX_PENDING_ACKS; i++)
-    {
-        if (!ack_trackers[i].ack_received && ack_trackers[i].packet_id != 0)
-        {
-            uint64_t send_time_ms = (uint64_t)ack_trackers[i].send_time.tv_sec * 1000 +
-                                    ack_trackers[i].send_time.tv_nsec / 1000000;
-            uint64_t elapsed = current_time - send_time_ms;
-
-            if (elapsed > RETRY_TIMEOUT_MS)
-            {
-                if (ack_trackers[i].retry_count < MAX_RETRY_COUNT)
-                {
-                    // 重试发送
-                    ack_trackers[i].retry_count++;
-                    clock_gettime(CLOCK_MONOTONIC, &ack_trackers[i].send_time);
-                    // 重新发送数据
-                    int written = write(g_bt_device->fd, ack_trackers[i].data, ack_trackers[i].data_len);
-                    if (written != ack_trackers[i].data_len)
-                    {
-                        log_error("Failed to retry packet ID: %d", ack_trackers[i].packet_id);
-                        return -1;
-                    }
-                    log_info("Retry packet ID: %d, retry count: %d",
-                             ack_trackers[i].packet_id, ack_trackers[i].retry_count);
-                }
-                else
-                {
-                    // 超过最大重试次数，触发重同步
-                    log_error("Max retry count reached for packet ID: %d",
-                              ack_trackers[i].packet_id);
-                    trigger_resync(g_bt_device);
-                    return -1;
-                }
-            }
-        }
-    }
-    return 0;
-}
-
-// 公共函数：检查超时并重试
-int app_bt_check_and_retry(Device *device)
-{
-    // 更新全局设备指针
-    if (device != NULL)
-    {
-        g_bt_device = device;
-    }
-    return check_and_retry();
-}
-
-static int is_ack_timeout(const ack_tracker_t *tracker, uint32_t timeout_ms)
-{
-    uint64_t current_time = get_current_time_ms();
-    uint64_t send_time_ms = (uint64_t)tracker->send_time.tv_sec * 1000 + tracker->send_time.tv_nsec / 1000000;
-    uint64_t elapsed = current_time - send_time_ms;
-    return elapsed > timeout_ms;
-}
-
-static void trigger_resync(Device *device)
-{
-    // 实现重同步逻辑，例如重新发送未确认的数据包
-    log_error("trigger_resync");
-
-    // 1. 清空接收缓冲区
-    read_len = 0;
-    memset(read_buf, 0, sizeof(read_buf));
-
-    // 2. 重置所有ACK跟踪器
-    memset(ack_trackers, 0, sizeof(ack_trackers));
-    next_tracker_index = 0;
-
-    // 3. 重置FSM状态
-    current_state = FSM_STATE_IDLE;
-    parse_pos = 0;
-
-    // 4. 刷新串口缓冲区（如果device不为NULL）
-    if (device != NULL)
-    {
-        app_serial_flush(device);
-    }
-    log_info("Resync completed");
-}
-
-int process_ack(uint16_t packet_id)
-{
-    // 查找对应的包ID
-    for (int i = 0; i < MAX_PENDING_ACKS; i++)
-    {
-        if (ack_trackers[i].packet_id == packet_id && !ack_trackers[i].ack_received)
-        {
-            // 检查是否超时
-            if (is_ack_timeout(&ack_trackers[i], ACK_TIMEOUT_MS))
-            {
-                log_error("ACK timeout for packet ID: %d", packet_id);
-                // 触发重同步
-                // 注意：这里没有device参数，需要根据实际情况调整
-                return -1;
-            }
-            // 标记为已接受
-            ack_trackers[i].ack_received = 1;
-            return 0;
-        }
-    }
-
-    // 未找到对应的包ID
-    log_error("ACK for unknown packet ID: %d", packet_id);
-    // 注意：这里没有device参数，需要根据实际情况调整
-    return -1;
 }
 
 static int init_bluetooth(Device *device)
@@ -226,6 +67,8 @@ static int init_bluetooth(Device *device)
     app_serial_flush(device);
 
     // 检查蓝牙是否可用（115200波特率）
+    // 临时切换到阻塞模式以等待 AT 指令响应
+    app_serial_setBlockMode(device, 1);
     if (app_bt_status(device) == 0)
     {
         log_debug("Bluetooth already at 115200 baud rate");
@@ -253,6 +96,7 @@ static int init_bluetooth(Device *device)
         else
         {
             log_error("bluetooth is not available at either 9600 or 115200 baud rate");
+            app_serial_setBlockMode(device, 0);
             return -1;
         }
     }
@@ -261,6 +105,7 @@ static int init_bluetooth(Device *device)
     if (app_bt_status(device) != 0)
     {
         log_error("bluetooth is not available");
+        app_serial_setBlockMode(device, 0);
         return -1;
     }
 
@@ -268,8 +113,9 @@ static int init_bluetooth(Device *device)
     app_bt_setNetId(device, "1111");
     // 设置MAC地址: 组内不同 组间可以相同
     app_bt_setMaddr(device, "0001");
-    // 将串口设置为阻塞模式
-    app_serial_setBlockMode(device, 1);
+
+    // 恢复为非阻塞模式
+    app_serial_setBlockMode(device, 0);
     app_serial_flush(device);
 
     log_debug("bluetooth is available");
@@ -292,42 +138,26 @@ int app_bt_init(Device *device)
 
 int app_bt_preWrite(char *data, int data_len)
 {
-    // 检查data数据受否合法
-    if (data_len < 6)
-    {
-        log_error("data_len is too short(6)");
+    // 假设 data[0]=conn_type, data[1]=id_len, data[2]=msg_len, data[3]=id, data[4]=msg
+    int msg_len = data[2];
+    if (msg_len < 1)
         return -1;
-    }
-    // 计算蓝牙数据的长度
-    int blue_len = 8 + 2 + data[2] + 2;
+    uint8_t control = data[5]; // 控制字符（如 '1' 或 '0'）
 
-    // 检查长度是否合法
-    if (blue_len > MAXX_BLUE_DATA_LEN)
-    {
-        log_error("blue_len is too large: %d", blue_len);
-        return -1;
-    }
-
-    // 创建蓝牙数据数组
     char blue_data[MAXX_BLUE_DATA_LEN];
+    int blue_len = 7 + 1 + 2 + 2 + 1 + 1 + 2; // "AT+MESH"+CMD+目标地址+源地址+长度+数据+\r\n
+    memcpy(blue_data, "AT+MESH", 7);
+    blue_data[7] = 0x00;     // CMD=0 无应答
+    blue_data[8] = 0xFF;     // 目标地址高
+    blue_data[9] = 0xFF;     // 目标地址低
+    blue_data[10] = 0x00;    // 源地址高（网关固定）
+    blue_data[11] = 0x01;    // 源地址低
+    blue_data[12] = 0x01;    // 数据长度 = 1
+    blue_data[13] = control; // 数据
+    blue_data[14] = 0x0D;    // \r
+    blue_data[15] = 0x0A;    // \n
 
-    // 根据data中的数据组装蓝牙数据
-    // data: 1 2 3 XX abc
-    // blue_data: AT+MESH XX abc \r\n
-    // 拷贝AT+MESH
-    memcpy(blue_data, "AT+MESH", 8);
-    // 拷贝id
-    memcpy(blue_data + 8, data + 3, 2);
-    // 拷贝message
-    memcpy(blue_data + 10, data + 5, data[2]);
-    // 拷贝\r\n
-    memcpy(blue_data + 10 + data[2], "\r\n", 2);
-
-    // 清空data中的数据
-    memset(data, 0, data_len);
-    // 将蓝牙数据拷贝到data中
     memcpy(data, blue_data, blue_len);
-    // 返回蓝牙数据的长度
     return blue_len;
 }
 
@@ -370,8 +200,6 @@ int app_bt_postRead(char *data, int data_len)
         // 清空读缓冲区和重置状态
         read_len = 0;
         memset(read_buf, 0, sizeof(read_buf));
-        memset(ack_trackers, 0, sizeof(ack_trackers));
-        next_tracker_index = 0;
         current_state = FSM_STATE_IDLE;
         parse_pos = 0;
         return 0;
@@ -439,8 +267,12 @@ int app_bt_postRead(char *data, int data_len)
                 // 检查长度是否合法
                 if (temp_len > 250)
                 { // 假设最大长度为250
-                    log_error("Invalid length: %d, triggering resync", temp_len);
-                    trigger_resync(g_bt_device);
+                    log_error("Invalid length: %d", temp_len);
+                    // 清空读缓冲区和重置状态
+                    read_len = 0;
+                    memset(read_buf, 0, sizeof(read_buf));
+                    current_state = FSM_STATE_IDLE;
+                    parse_pos = 0;
                     return 0;
                 }
                 current_state = FSM_STATE_WAIT_DATA;
@@ -471,7 +303,11 @@ int app_bt_postRead(char *data, int data_len)
                 if (data_len < output_len)
                 {
                     log_error("Output buffer too small: need %d, have %d", output_len, data_len);
-                    trigger_resync(g_bt_device);
+                    // 清空读缓冲区和重置状态
+                    read_len = 0;
+                    memset(read_buf, 0, sizeof(read_buf));
+                    current_state = FSM_STATE_IDLE;
+                    parse_pos = 0;
                     return 0;
                 }
 
@@ -505,8 +341,12 @@ int app_bt_postRead(char *data, int data_len)
             break;
 
         case FSM_STATE_ERROR:
-            log_error("FSM error state, triggering resync");
-            trigger_resync(g_bt_device);
+            log_error("FSM error state");
+            // 清空读缓冲区和重置状态
+            read_len = 0;
+            memset(read_buf, 0, sizeof(read_buf));
+            current_state = FSM_STATE_IDLE;
+            parse_pos = 0;
             return 0;
         }
     }
@@ -517,17 +357,55 @@ int app_bt_postRead(char *data, int data_len)
 // 判断是否收到ACK指令
 int wait_ack(int fd)
 {
-    // 等待一定时间
-    usleep(50 * 1000);
-    // 读取数据
     char data_buf[4];
-    read(fd, data_buf, 4);
-    // 判断是否是OK\r\n
+    int total_read = 0;
+    int ret;
+
+    // 设置超时时间为 100ms
+    struct timeval timeout;
+    fd_set read_fds;
+
+    while (total_read < 4)
+    {
+        FD_ZERO(&read_fds);
+        FD_SET(fd, &read_fds);
+
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 100000; // 100ms
+
+        ret = select(fd + 1, &read_fds, NULL, NULL, &timeout);
+        if (ret < 0)
+        {
+            log_error("select error in wait_ack: %s", strerror(errno));
+            return -1;
+        }
+        else if (ret == 0)
+        {
+            log_error("wait_ack timeout after 100ms");
+            return -1;
+        }
+
+        // 有数据可读
+        ssize_t n = read(fd, data_buf + total_read, 4 - total_read);
+        if (n <= 0)
+        {
+            if (n == 0)
+                log_error("wait_ack: device closed");
+            else
+                log_error("wait_ack read error: %s", strerror(errno));
+            return -1;
+        }
+
+        total_read += n;
+    }
+
+    // 检查是否为 "OK\r\n"
     if (memcmp(data_buf, "OK\r\n", 4) != 0)
     {
-        log_error("wait_ack failed");
+        log_error("wait_ack failed: expected 'OK\\r\\n', got '%.*s'", total_read, data_buf);
         return -1;
     }
+
     log_debug("wait_ack success");
     return 0;
 }

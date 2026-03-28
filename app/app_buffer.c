@@ -21,7 +21,7 @@ static void swap_sub_buffer(Buffer *buffer)
 {
     // 如果正在写，不能切换 -> 切换操作要加写锁
     // 加写锁
-    log_debug("Ready to switch buffer add write lock");
+    // log_debug("Ready to switch buffer add write lock");
     pthread_mutex_lock(&buffer->write_lock);
 
     int temp = buffer->read_index;
@@ -29,7 +29,7 @@ static void swap_sub_buffer(Buffer *buffer)
     buffer->write_index = temp;
 
     // 解写锁
-    log_debug("After switching buffer release write lock");
+    // log_debug("After switching buffer release write lock");
     pthread_mutex_unlock(&buffer->write_lock);
 }
 
@@ -108,8 +108,10 @@ int app_buffer_write(Buffer *buffer, char *data, int data_len)
 
 int app_buffer_read(Buffer *buffer, char *data_buf, int buf_size)
 {
+    // log_debug("app_buffer_read: enter, read_index=%d, write_index=%d", buffer->read_index, buffer->write_index);
+
     // 加读锁
-    log_debug("Before reading data add read lock");
+    // log_debug("Before reading data add read lock");
     pthread_mutex_lock(&buffer->read_lock);
     // 得到读缓冲区
     SubBuffer *r_buffer = buffer->sub_buffers[buffer->read_index];
@@ -121,14 +123,14 @@ int app_buffer_read(Buffer *buffer, char *data_buf, int buf_size)
         // 如果切换后仍然没有数据，返回-1
         if (r_buffer->len == 0)
         {
-            log_error("no data in buffer");
+            // log_warn("no data in buffer");
             pthread_mutex_unlock(&buffer->read_lock);
             return -1;
         }
     }
     // 读取一份数据保存到data_buf中： 先读长度，再度数据
     int data_len = r_buffer->ptr[0];
-    log_debug("------data_len: %d", data_len);
+    log_debug("app_buffer_read: data_len=%d", data_len);
     // 判断data_buf是否足够大
     if (buf_size < data_len)
     {

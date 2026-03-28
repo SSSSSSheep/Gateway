@@ -24,49 +24,40 @@ static void *up_thread_fun(void *arg)
 
     while (dev->up_thread_running)
     {
-        pthread_mutex_lock(&dev->up_queue_mutex);
-
-        // 等待队列中有数据
-        while (dev->up_queue->sub_buffers[dev->up_queue->read_index]->len == 0 && dev->up_thread_running)
-        {
-            pthread_cond_wait(&dev->up_queue_cond, &dev->up_queue_mutex);
-        }
-
-        if (!dev->up_thread_running)
-        {
-            pthread_mutex_unlock(&dev->up_queue_mutex);
-            break;
-        }
-
-        // 从up_queue读取数据
+        // 直接读取，不等待条件变量
         int data_len = app_buffer_read(dev->up_queue, data_buf, sizeof(data_buf));
-
-        pthread_mutex_unlock(&dev->up_queue_mutex);
-
-        if (data_len <= 0)
+        if (data_len > 0)
         {
-            continue;
+            log_debug("up_thread: read %d bytes", data_len);
+            if (app_pool_add_task(JOB_TYPE_MQTT_PUBLISH, data_buf, data_len) != 0)
+            {
+                log_error("add task to pool error");
+            }
+            else
+            {
+                log_debug("Processed data added to MQTT queue, len=%d", data_len);
+            }
         }
-
-        // data_buf 已经是解析好的应用层数据（格式为 conn_type + id_len + msg_len + id + msg）
-        // 直接传递给 MQTT 发布，无需再调用 app_bt_postRead
-        if (app_pool_add_task(JOB_TYPE_MQTT_PUBLISH, data_buf, data_len) != 0)
+        else
         {
-            log_error("add task to pool error");
-            continue;
+            // 无数据时短暂休眠，避免空转
+            usleep(10000); // 10ms
         }
-        log_debug("Processed data added to MQTT queue, len=%d", data_len);
     }
     return NULL;
 }
 
+/*
 static void *write_thread_fun(void *arg)
 {
+    log_info("write_thread_fun started");
+
     Device *dev = (Device *)arg;
     char data_buf[128];
 
     while (dev->write_thread_running)
     {
+        log_debug("write_thread: loop start");
         pthread_mutex_lock(&dev->write_mutex);
 
         // 等待队列中有数据
@@ -83,7 +74,7 @@ static void *write_thread_fun(void *arg)
 
         // 从write_queue读取数据
         int data_len = app_buffer_read(dev->write_queue, data_buf, sizeof(data_buf));
-
+        log_debug("write_thread: read %d bytes", data_len);
         pthread_mutex_unlock(&dev->write_mutex);
 
         if (data_len <= 0)
@@ -117,16 +108,13 @@ static void *write_thread_fun(void *arg)
             }
         }
 
-        // 添加跟踪
-        int need_track = 0;
-        if (data_len > 0 && strncmp(data_buf, "AT+MESH", 7) == 0)
+        char hex_buf[256];
+        int hex_pos = 0;
+        for (int i = 0; i < data_len && hex_pos < sizeof(hex_buf) - 3; i++)
         {
-            need_track = 1;
+            hex_pos += sprintf(hex_buf + hex_pos, "%02X ", (unsigned char)data_buf[i]);
         }
-        else if (data_len > 0 && strncmp(data_buf, "AT+MESHSTATISTICS", 16) == 0)
-        {
-            need_track = 1;
-        }
+        log_debug("Sending to serial (%d bytes): %s", data_len, hex_buf);
 
         // 处理非阻塞写入
         ssize_t write_len = 0;
@@ -182,16 +170,6 @@ static void *write_thread_fun(void *arg)
             continue;
         }
 
-        // 写入成功，添加追踪
-        if (need_track)
-        {
-            int ret = app_bt_add_tracker(dev, data_buf, data_len);
-            if (ret != 0)
-            {
-                log_error("CRITICAL: Message sent but tracker failed to add!");
-            }
-        }
-
         // 安全打印：确保不越界
         if (data_len > 0)
         {
@@ -210,11 +188,141 @@ static void *write_thread_fun(void *arg)
 
     return NULL;
 }
+*/
+static void *write_thread_fun(void *arg)
+{
+    log_info("write_thread_fun started (polling mode)");
+    Device *dev = (Device *)arg;
+    char data_buf[128];
 
+    while (dev->write_thread_running)
+    {
+        // 直接读取队列，不等待条件变量
+        int data_len = app_buffer_read(dev->write_queue, data_buf, sizeof(data_buf));
+        if (data_len > 0)
+        {
+            log_debug("write_thread: read %d bytes", data_len);
+
+            // 判断消息类型
+            msg_type_t msg_type = MSG_TYPE_DATA;
+            if (data_len >= 2 && strncmp(data_buf, "AT", 2) == 0)
+            {
+                msg_type = MSG_TYPE_AT_CMD;
+            }
+
+            // AT指令间隔控制
+            if (msg_type == MSG_TYPE_AT_CMD)
+            {
+                long distance = app_common_getCurrentTime() - dev->last_write_time;
+                if (distance < 200)
+                {
+                    // 简单的延时优化：如果延时期间收到退出信号，能更快响应
+                    long delay = (200 - distance) * 1000;
+                    long sleep_step = 10000; // 10ms
+                    while (delay > 0 && dev->write_thread_running)
+                    {
+                        usleep(sleep_step);
+                        delay -= sleep_step;
+                    }
+                    if (!dev->write_thread_running)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // 十六进制打印（调试用）
+            char hex_buf[256];
+            int hex_pos = 0;
+            for (int i = 0; i < data_len && hex_pos < sizeof(hex_buf) - 3; i++)
+            {
+                hex_pos += sprintf(hex_buf + hex_pos, "%02X ", (unsigned char)data_buf[i]);
+            }
+            log_debug("Sending to serial (%d bytes): %s", data_len, hex_buf);
+
+            // 处理非阻塞写入
+            ssize_t write_len = 0;
+            int retry_count = 0;
+            const int max_retry = 3;
+
+            while (retry_count < max_retry)
+            {
+                write_len = write(dev->fd, data_buf, data_len);
+
+                if (write_len == data_len)
+                {
+                    // 写入完整，跳出重试循环
+                    break;
+                }
+                else if (write_len < 0)
+                {
+                    // 发生错误
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        // 缓冲区满，等待一小会儿重试
+                        log_warn("Serial write buffer full, retrying...");
+                        usleep(20000); // 20ms
+                        retry_count++;
+                    }
+                    else if (errno == EBADF)
+                    {
+                        // 文件描述符已关闭，退出循环
+                        log_debug("File descriptor closed, exiting write thread");
+                        break;
+                    }
+                    else
+                    {
+                        // 真正的错误（如设备断开）
+                        log_error("Serial write error: %s", strerror(errno));
+                        retry_count = max_retry; // 强制退出
+                        break;
+                    }
+                }
+                else
+                {
+                    // 部分写入 (处理逻辑较复杂，通常建议重试整个包或丢弃)
+                    // 这里简单处理：视为失败，重试
+                    log_warn("Serial partial write: %d/%d, retrying...", (int)write_len, data_len);
+                    retry_count++;
+                }
+            }
+
+            // 检查最终写入结果
+            if (write_len != data_len)
+            {
+                log_error("Failed to write to serial after retries. Dropping packet.");
+                continue;
+            }
+
+            // 安全打印：确保不越界
+            if (data_len > 0)
+            {
+                // 临时截断字符串以便打印，防止 %s 越界
+                char temp_buf[128];
+                int print_len = data_len < sizeof(temp_buf) - 1 ? data_len : sizeof(temp_buf) - 1;
+                memcpy(temp_buf, data_buf, print_len);
+                temp_buf[print_len] = '\0';
+                log_debug("write to bluetooth serial success, len=%d, data=%.32s...", data_len, temp_buf);
+            }
+
+            // 更新时间和类型
+            dev->last_write_time = app_common_getCurrentTime();
+            dev->last_msg_type = msg_type;
+        }
+        else
+        {
+            // 无数据时短暂休眠，避免空转
+            usleep(10000); // 10ms
+        }
+    }
+    return NULL;
+}
 // 写线程函数：从下行缓冲区读取数据并写入设备文件
 // 注意：AT控制指令写时间间隔需要 >= 200ms，数据转发无限制
 static int write_thread_handler(const uint8_t *data, uint32_t len)
 {
+    log_info("write_thread_handler: len=%u", len);
+
     if (!device || !data || len == 0)
         return -1;
 
@@ -244,7 +352,12 @@ static int write_thread_handler(const uint8_t *data, uint32_t len)
 static int send_message_handler(const uint8_t *data, uint32_t len)
 {
     // 参数data和len已经处理过
-
+    log_debug("send_message_handler: len=%u", len);
+    // 打印前几个字节
+    for (int i = 0; i < len && i < 16; i++)
+    {
+        log_debug("data[%d]=0x%02x", i, data[i]);
+    }
     // 1. 将字符数据message 转换为json
     char *json = app_message_chars2Json((char *)data, len);
     if (!json)
@@ -336,6 +449,7 @@ static void *read_thread_fun(void *arg)
             if (ret > 0)
             {
                 app_buffer_write(dev->up_queue, data_buf, ret);
+                log_debug("read_thread: wrote %d bytes to up_queue, queue len now %d", ret, dev->up_queue->sub_buffers[dev->up_queue->read_index]->len);
                 pthread_cond_signal(&dev->up_queue_cond);
             }
             pthread_mutex_unlock(&dev->up_queue_mutex);
@@ -346,6 +460,7 @@ static void *read_thread_fun(void *arg)
 // 当收到远程消息的回调函数
 static int recv_msg_callback(char *json)
 {
+    log_info("recv_msg_callback: %s", json); // 用 INFO 级别，确保输出
     // json消息转换为字符数组Message
     char data_buf[128];
     int data_len = app_message_json2Chars(json, data_buf, sizeof(data_buf));
@@ -434,10 +549,19 @@ int app_device_start()
     pthread_create(&device->read_thread, NULL, read_thread_fun, device);
     // 启动专用写入线程
     device->write_thread_running = 1;
-    pthread_create(&device->write_thread, NULL, write_thread_fun, device);
+    // pthread_create(&device->write_thread, NULL, write_thread_fun, device);
+    if (pthread_create(&device->write_thread, NULL, write_thread_fun, device) != 0)
+    {
+        log_error("Failed to create write thread");
+    }
+    else
+    {
+        log_info("Write thread created");
+    }
     // 启动上行处理线程
     device->up_thread_running = 1;
     pthread_create(&device->up_thread, NULL, up_thread_fun, device);
+    log_debug("read thread started");
     // 启动MQTT模块，注册一个接收远程消息的回调函数
     app_mqtt_registerRecvCallback(recv_msg_callback);
 

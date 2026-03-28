@@ -1,6 +1,7 @@
 #ifndef __OTA_HTTP_H__
 #define __OTA_HTTP_H__
 
+#include <stddef.h>
 // 版主信息地址
 #define OTA_URL_FILEINFO "http://192.168.1.4:8000/fileinfo.json"
 // 下载地址
@@ -8,8 +9,7 @@
 // #define OTA_LOCAL_FILE_PATH "/home/admin123/gateway.update"
 #define OTA_LOCAL_FILE_PATH "/root/gateway.update"
 
-typedef struct
-{
+typedef struct {
     char *buf;
     size_t size;
     size_t used;
@@ -32,4 +32,4 @@ char *ota_http_getJson(char *url);
  */
 int ota_http_download(char *url, char *filename);
 
-#endif // !__OTA_HTTP_H__
+#endif  // !__OTA_HTTP_H__

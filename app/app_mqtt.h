@@ -4,8 +4,8 @@
 #include <MQTTClient.h>
 #include <time.h>
 
-// #define ADDRESS "ws://192.168.1.4:8083"
-#define ADDRESS "tcp://192.168.1.4:1883"
+#define ADDRESS "ws://192.168.1.4:8083"
+// #define ADDRESS "tcp://192.168.1.4:1883"
 #define CLIENTID "b253ba38-daf6-4b37-984f-5d8fdc6a1cfa"
 #define TOPIC_R2G "remote_to_gateway" // 接收远程消息主题
 #define TOPIC_G2R "gateway_to_remote" // 发送远程消息主题

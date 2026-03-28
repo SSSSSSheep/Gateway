@@ -4,19 +4,14 @@
 #include "app_device.h"
 #include "stdint.h"
 
-#define MAX_PENDING_ACKS 16
-#define ACK_TIMEOUT_MS 1000
-
 #define MAXX_BLUE_DATA_LEN 256
 
 // 接收缓冲区大小上限
 #define MAX_RECV_BUFFER_SIZE 1024
 
 // 最大重试次数
-#define MAX_RETRY_COUNT 3
 
 // 重试超时时间（毫秒）
-#define RETRY_TIMEOUT_MS 1000
 
 // 状态机
 typedef enum
@@ -37,12 +32,12 @@ typedef struct
     uint8_t retry_count;       // 重试次数
     uint8_t data[256];         // 数据
     uint32_t data_len;         // 数据长度
-} ack_tracker_t;
+} tracker_t;
 
 typedef enum
 {
     BT_BR_9600 = '4',
-    BT_BR_115200 = '8',
+    BT_BR_115200 = '8'
 } BT_BaudRate;
 
 /**
@@ -52,6 +47,7 @@ typedef enum
  * @param device
  * @return int
  */
+
 int app_bt_init(Device *device);
 
 /**
@@ -134,7 +130,6 @@ int app_bt_setMaddr(Device *device, char *maddr);
  * @param data_len   数据长度
  * @return int       返回0表示成功，返回-1表示失败
  */
-int app_bt_add_tracker(Device *device, const char *data, int data_len);
 
 /**
  * @brief 检查并重试
@@ -142,5 +137,4 @@ int app_bt_add_tracker(Device *device, const char *data, int data_len);
  * @param device     设备
  * @return int       返回0表示成功，返回-1表示失败
  */
-int app_bt_check_and_retry(Device *device);
 #endif // !__APP_BT_H

@@ -369,7 +369,7 @@ int app_pool_add_task(job_type_t type, const uint8_t *data, uint32_t len)
 
     // 发送任务到消息队列
     int ret = mq_send(mq_fd, (char *)&task, sizeof(Task), 0);
-
+    log_debug("mq_send returned %d, errno=%d", ret, errno);
     // 处理EAGAIN错误（队列满）
     if (ret == -1 && errno == EAGAIN)
     {

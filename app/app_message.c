@@ -11,6 +11,13 @@
 */
 char *app_message_chars2Json(char *chars, int chars_len)
 {
+    log_debug("chars2Json: len=%d", chars_len);
+    // 打印前几个字节（作为字符，可能不可打印，用十六进制更稳妥）
+    for (int i = 0; i < chars_len && i < 10; i++)
+    {
+        log_debug("chars[%d]=0x%02x", i, (unsigned char)chars[i]);
+    }
+
     // 从chars中读取出conn_type, id_len, msg_len,id, msg
     int conn_type = chars[0];
     int id_len = chars[1];

@@ -17,9 +17,9 @@ static unconfirmed_message_t unconfirmed_messages[UNCONFIRMED_MESSAGES_MAX];
 static int unconfirmed_count = 0;
 
 // 配置连接选项
-static int reconnect_attempts = 0; // 重连次数
-static const int MAX_RECONNECT_ATTEMPTS = 10;
-static const int RECONNECT_DELAY_MS = 5000; // seconds
+static int reconnect_attempts = 0;            // 重连次数
+static const int MAX_RECONNECT_ATTEMPTS = -1; /* -1 琛ㄧず鏃犻檺閲嶈瘯 */
+static const int RECONNECT_DELAY_MS = 5000;   // seconds
 
 // 消息确认回调
 static void delivered(void *context, MQTTClient_deliveryToken dt)
@@ -195,12 +195,12 @@ static void connlost(void *context, char *cause)
 {
     log_error("MQTT connection lost, cause: %s", cause);
 
-    // 尝试重新连接
-    reconnect_attempts = 0;
-    while (reconnect_attempts < MAX_RECONNECT_ATTEMPTS)
+    int backoff_ms = 1000;            // 初始重连间隔 1 秒
+    const int MAX_BACKOFF_MS = 60000; // 最大重连间隔 60 秒
+
+    while (1)
     {
-        log_info("Attempting to reconnect... (attempt %d/%d)",
-                 reconnect_attempts + 1, MAX_RECONNECT_ATTEMPTS);
+        log_info("Attempting to reconnect (backoff=%d ms)...", backoff_ms);
 
         if (MQTTClient_connect(client, &conn_opts) == MQTTCLIENT_SUCCESS)
         {
@@ -210,25 +210,30 @@ static void connlost(void *context, char *cause)
             if (MQTTClient_subscribe(client, TOPIC_R2G, QOS) != MQTTCLIENT_SUCCESS)
             {
                 log_error("Failed to resubscribe to topic %s", TOPIC_R2G);
-                reconnect_attempts++;
+                // 订阅失败，继续重试（退避后循环）
+                backoff_ms = backoff_ms * 2;
+                if (backoff_ms > MAX_BACKOFF_MS)
+                    backoff_ms = MAX_BACKOFF_MS;
+                usleep(backoff_ms * 1000);
                 continue;
             }
 
             // 重发未确认的消息
             resend_unconfirmed_messages();
 
-            reconnect_attempts = 0;
-
+            // 重连成功，退出循环
             return;
         }
 
-        reconnect_attempts++;
-        usleep(RECONNECT_DELAY_MS * 1000);
+        // 连接失败，增大退避间隔
+        backoff_ms = backoff_ms * 2;
+        if (backoff_ms > MAX_BACKOFF_MS)
+            backoff_ms = MAX_BACKOFF_MS;
+        usleep(backoff_ms * 1000);
     }
 
-    log_error("Failed to reconnect after %d attempts", MAX_RECONNECT_ATTEMPTS);
+    log_error("Unexpected exit from reconnect loop");
 }
-
 int app_mqtt_init(void)
 {
     // 配置连接选项
